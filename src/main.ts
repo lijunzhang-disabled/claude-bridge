@@ -174,6 +174,13 @@ async function runDaemon(): Promise<void> {
     sessionStore.save(account.accountId, session);
   }
 
+  // Fix: reset stale non-idle state on startup (e.g. after crash)
+  if (session.state !== 'idle') {
+    logger.warn('Resetting stale session state on startup', { state: session.state });
+    session.state = 'idle';
+    sessionStore.save(account.accountId, session);
+  }
+
   const sender = createSender(api, account.accountId);
   const sharedCtx = { lastContextToken: '' };
   const activeControllers = new Map<string, AbortController>();
@@ -427,8 +434,8 @@ async function sendToClaude(
     const effectivePermissionMode = session.permissionMode ?? config.permissionMode;
     const isAutoPermission = effectivePermissionMode === 'auto';
 
-    // Map 'auto' to the SDK's underlying mode (use acceptEdits as base, but we override canUseTool)
-    const sdkPermissionMode = isAutoPermission ? 'acceptEdits' : effectivePermissionMode;
+    // Map 'auto' to bypassPermissions — skips all permission checks in the SDK
+    const sdkPermissionMode = isAutoPermission ? 'bypassPermissions' : effectivePermissionMode;
 
     // Unified buffer: text deltas and tool summaries all go here
     let pendingBuffer = '';
