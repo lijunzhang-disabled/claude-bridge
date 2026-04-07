@@ -23,7 +23,7 @@ A [Claude Code](https://claude.ai/claude-code) Skill that bridges personal WeCha
 
 - Node.js >= 18
 - macOS or Linux
-- Personal WeChat account (QR code binding required)
+- Personal WeChat account (QR code binding required). You must update WeChat to the latest version and enable the ClawBot plugin in Settings → WeChat Plus (插件) before scanning.
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with `@anthropic-ai/claude-agent-sdk` installed
   > **Note:** The SDK supports third-party API providers (e.g. OpenRouter, AWS Bedrock, custom OpenAI-compatible endpoints) — set `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` accordingly.
 

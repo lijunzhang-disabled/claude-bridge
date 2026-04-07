@@ -23,7 +23,7 @@
 
 - Node.js >= 18
 - macOS 或 Linux
-- 个人微信账号（需扫码绑定）
+- 个人微信账号（需扫码绑定）。请先将微信更新到最新版本，并在 设置 → 插件 中启用 ClawBot（龙虾）插件。
 - 已安装 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（含 `@anthropic-ai/claude-agent-sdk`）
   > **注意：** 该 SDK 支持第三方 API 提供商（如 OpenRouter、AWS Bedrock、自定义 OpenAI 兼容接口）——按需设置 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_API_KEY` 即可。
 
