@@ -508,9 +508,16 @@ async function sendToClaude(
 
     let result = await claudeQuery(queryOptions);
 
-    // If resume failed (e.g. corrupted session), retry without resume
-    if (result.error && queryOptions.resume) {
-      logger.warn('Resume failed, retrying without resume', { error: result.error, sessionId: queryOptions.resume });
+    // Only retry without resume for session-specific errors (corrupted/missing session).
+    // Do NOT discard the session on transient errors like auth failures or timeouts.
+    const isSessionError = result.error && queryOptions.resume && (
+      result.error.includes('session') ||
+      result.error.includes('resume') ||
+      result.error.includes('conversation not found') ||
+      result.error.includes('empty response')  // Claude returned nothing, session may be corrupt
+    );
+    if (isSessionError) {
+      logger.warn('Resume failed with session error, retrying without resume', { error: result.error, sessionId: queryOptions.resume });
       queryOptions.resume = undefined;
       session.sdkSessionId = undefined;
       sessionStore.save(account.accountId, session);
@@ -541,8 +548,10 @@ async function sendToClaude(
       await sender.sendText(fromUserId, contextToken, 'ℹ️ Claude 无返回内容（可能因权限被拒而终止）');
     }
 
-    // Update session with new SDK session ID
-    session.sdkSessionId = result.sessionId || undefined;
+    // Update session with new SDK session ID; preserve existing if new one is empty
+    if (result.sessionId) {
+      session.sdkSessionId = result.sessionId;
+    }
     session.state = 'idle';
     sessionStore.save(account.accountId, session);
   } catch (err) {

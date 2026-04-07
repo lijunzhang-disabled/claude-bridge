@@ -242,14 +242,14 @@ export async function claudeQuery(options: QueryOptions): Promise<QueryResult> {
   let thinkingBuf = "";      // accumulates current thinking block
   let thinkingCapped = false; // true once we've emitted the preview for this block
 
-  const QUERY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+  const QUERY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
   try {
     const result = query({ prompt: promptParam, options: sdkOptions });
 
     let timeoutId: ReturnType<typeof setTimeout>;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error('Claude query timed out after 5 minutes')), QUERY_TIMEOUT_MS);
+      timeoutId = setTimeout(() => reject(new Error('Claude query timed out after 30 minutes')), QUERY_TIMEOUT_MS);
     });
 
     const iterateResult = async () => {
