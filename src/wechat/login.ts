@@ -1,9 +1,9 @@
 import type { AccountData } from './accounts.js';
 import { DEFAULT_BASE_URL, saveAccount } from './accounts.js';
 import { logger } from '../logger.js';
+import { ILINK_COMMON_HEADERS } from './protocol.js';
 
 const QR_CODE_URL = `${DEFAULT_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3`;
-const QR_STATUS_URL = `${DEFAULT_BASE_URL}/ilink/bot/get_qrcode_status`;
 const POLL_INTERVAL_MS = 3_000;
 
 interface QrCodeResponse {
@@ -20,6 +20,8 @@ interface QrStatusResponse {
   ilink_bot_id?: string;
   baseurl?: string;
   ilink_user_id?: string;
+  /** New host to redirect polling to when status is scaned_but_redirect. */
+  redirect_host?: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -30,7 +32,7 @@ function sleep(ms: number): Promise<void> {
 export async function startQrLogin(): Promise<{ qrcodeUrl: string; qrcodeId: string }> {
   logger.info('Requesting QR code');
 
-  const res = await fetch(QR_CODE_URL);
+  const res = await fetch(QR_CODE_URL, { headers: ILINK_COMMON_HEADERS });
   if (!res.ok) {
     throw new Error(`Failed to get QR code: HTTP ${res.status}`);
   }
@@ -56,17 +58,22 @@ export async function startQrLogin(): Promise<{ qrcodeUrl: string; qrcodeId: str
  */
 export async function waitForQrScan(qrcodeId: string): Promise<AccountData> {
   let currentQrcodeId = qrcodeId;
+  /** Effective polling base URL; may change on IDC redirect after scan. */
+  let currentBaseUrl = DEFAULT_BASE_URL;
 
   while (true) {
-    const url = `${QR_STATUS_URL}?qrcode=${encodeURIComponent(currentQrcodeId)}`;
+    const statusUrl = `${currentBaseUrl}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(currentQrcodeId)}`;
 
-    logger.debug('Polling QR status', { qrcodeId: currentQrcodeId });
+    logger.debug('Polling QR status', { qrcodeId: currentQrcodeId, baseUrl: currentBaseUrl });
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60_000);
+    const timer = setTimeout(() => controller.abort(), 35_000);
     let res: Response;
     try {
-      res = await fetch(url, { signal: controller.signal });
+      res = await fetch(statusUrl, {
+        headers: ILINK_COMMON_HEADERS,
+        signal: controller.signal,
+      });
     } catch (e: any) {
       clearTimeout(timer);
       if (e.name === 'AbortError' || e.code === 'ETIMEDOUT') {
@@ -89,6 +96,18 @@ export async function waitForQrScan(qrcodeId: string): Promise<AccountData> {
       case 'scaned':
         // Not yet confirmed, continue polling
         break;
+
+      case 'scaned_but_redirect': {
+        // IDC redirect: WeChat tells us to poll a different data center host.
+        const redirectHost = data.redirect_host;
+        if (redirectHost) {
+          currentBaseUrl = `https://${redirectHost}`;
+          logger.info('IDC redirect, switching polling host', { redirectHost });
+        } else {
+          logger.warn('scaned_but_redirect but redirect_host missing, continuing');
+        }
+        break;
+      }
 
       case 'confirmed': {
         if (!data.bot_token || !data.ilink_bot_id || !data.ilink_user_id) {

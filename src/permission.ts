@@ -1,7 +1,7 @@
 import { logger } from './logger.js';
 import type { PendingPermission } from './session.js';
 
-const PERMISSION_TIMEOUT = 120_000;
+const PERMISSION_TIMEOUT = 600_000;
 const GRACE_PERIOD = 15_000;
 
 export type OnPermissionTimeout = () => void;
@@ -66,7 +66,7 @@ export function createPermissionBroker(onTimeout?: OnPermissionTimeout) {
       `\u8F93\u5165: ${perm.toolInput.slice(0, 500)}`,
       '',
       '\u56DE\u590D y \u5141\u8BB8\uFF0Cn \u62D2\u7EDD',
-      '(120\u79D2\u672A\u56DE\u590D\u81EA\u52A8\u62D2\u7EDD)',
+      '(10\u5206\u949F\u672A\u56DE\u590D\u81EA\u52A8\u62D2\u7EDD)',
     ].join('\n');
   }
 

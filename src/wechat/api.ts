@@ -4,6 +4,7 @@ import type {
   GetUploadUrlResp,
 } from './types.js';
 import { logger } from '../logger.js';
+import { ILINK_COMMON_HEADERS, CHANNEL_VERSION } from './protocol.js';
 
 /** Generate a random uint32 and return its base64 representation. */
 function generateUin(): string {
@@ -45,6 +46,7 @@ export class WeChatApi {
       'Authorization': `Bearer ${this.token}`,
       'AuthorizationType': 'ilink_bot_token',
       'X-WECHAT-UIN': this.uin,
+      ...ILINK_COMMON_HEADERS,
     };
   }
 
@@ -86,13 +88,31 @@ export class WeChatApi {
     }
   }
 
+  private buildBaseInfo() {
+    return { channel_version: CHANNEL_VERSION };
+  }
+
   /** Long-poll for new messages. Timeout 35s for long-polling. */
   async getUpdates(buf?: string): Promise<GetUpdatesResp> {
-    return this.request<GetUpdatesResp>(
-      'ilink/bot/getupdates',
-      buf ? { get_updates_buf: buf } : {},
-      35_000,
-    );
+    try {
+      return await this.request<GetUpdatesResp>(
+        'ilink/bot/getupdates',
+        {
+          get_updates_buf: buf ?? '',
+          base_info: this.buildBaseInfo(),
+        },
+        35_000,
+      );
+    } catch (err) {
+      // HTTP 524 (Cloudflare origin timeout) is normal for long-poll when idle.
+      // Treat it as an empty response so the caller retries cleanly.
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('524')) {
+        logger.debug('getUpdates: Cloudflare 524 timeout, returning empty response');
+        return { ret: 0, msgs: [], get_updates_buf: buf ?? '', sync_buf: '' };
+      }
+      throw err;
+    }
   }
 
   /** Send a message to a user. Retries up to 3 times on rate-limit (ret: -2). */
@@ -100,7 +120,10 @@ export class WeChatApi {
     const MAX_RETRIES = 3;
     let delay = 10_000; // start with 10s backoff on rate-limit
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const res = await this.request<{ ret?: number }>('ilink/bot/sendmessage', req);
+      const res = await this.request<{ ret?: number }>('ilink/bot/sendmessage', {
+        ...req,
+        base_info: this.buildBaseInfo(),
+      });
       if ((res as any)?.ret === -2) {
         if (attempt === MAX_RETRIES) {
           logger.warn('sendMessage rate-limited after max retries', { attempts: MAX_RETRIES });
@@ -123,7 +146,12 @@ export class WeChatApi {
   ): Promise<GetUploadUrlResp> {
     return this.request<GetUploadUrlResp>(
       'ilink/bot/getuploadurl',
-      { file_type: fileType, file_size: fileSize, file_name: fileName },
+      {
+        file_type: fileType,
+        file_size: fileSize,
+        file_name: fileName,
+        base_info: this.buildBaseInfo(),
+      },
     );
   }
 }
