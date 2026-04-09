@@ -13,7 +13,7 @@ import { downloadImage, extractText, extractFirstImageUrl } from './wechat/media
 import { createSessionStore, type Session } from './session.js';
 import { createPermissionBroker } from './permission.js';
 import { routeCommand, type CommandContext, type CommandResult } from './commands/router.js';
-import { claudeQuery, type QueryOptions } from './claude/provider.js';
+import { PersistentSession, type SendOptions } from './claude/session.js';
 import { loadConfig, saveConfig } from './config.js';
 import { logger } from './logger.js';
 import { DATA_DIR } from './constants.js';
@@ -181,9 +181,26 @@ async function runDaemon(): Promise<void> {
     sessionStore.save(account.accountId, session);
   }
 
+  // -- Create persistent Claude Code session --
+  const effectivePermissionMode = session.permissionMode ?? config.permissionMode;
+  const isAutoPermission = effectivePermissionMode === 'auto';
+  const sdkPermissionMode = isAutoPermission ? 'bypassPermissions' as const : effectivePermissionMode;
+
+  const cwd = (session.workingDirectory || config.workingDirectory || process.cwd())
+    .replace(/^~/, process.env.HOME || '');
+
+  const claudeSession = new PersistentSession({
+    cwd,
+    model: session.model,
+    systemPrompt: config.systemPrompt,
+    permissionMode: sdkPermissionMode,
+    resume: session.sdkSessionId,
+  });
+  claudeSession.start();
+
   const sender = createSender(api, account.accountId);
   const sharedCtx = { lastContextToken: '' };
-  const activeControllers = new Map<string, AbortController>();
+  const activeAbortControllers = new Map<string, AbortController>();
   const permissionBroker = createPermissionBroker(async () => {
     try {
       await sender.sendText(account.userId ?? '', sharedCtx.lastContextToken, '⏰ 权限请求超时，已自动拒绝。');
@@ -196,7 +213,7 @@ async function runDaemon(): Promise<void> {
 
   const callbacks: MonitorCallbacks = {
     onMessage: async (msg: WeixinMessage) => {
-      await handleMessage(msg, account, session, sessionStore, permissionBroker, sender, config, sharedCtx, activeControllers);
+      await handleMessage(msg, account, session, sessionStore, permissionBroker, sender, config, sharedCtx, activeAbortControllers, claudeSession);
     },
     onSessionExpired: () => {
       logger.warn('Session expired, will keep retrying...');
@@ -210,6 +227,7 @@ async function runDaemon(): Promise<void> {
 
   function shutdown(): void {
     logger.info('Shutting down...');
+    claudeSession.close();
     monitor.stop();
     process.exit(0);
   }
@@ -237,6 +255,7 @@ async function handleMessage(
   config: ReturnType<typeof loadConfig>,
   sharedCtx: { lastContextToken: string },
   activeControllers: Map<string, AbortController>,
+  claudeSession: PersistentSession,
 ): Promise<void> {
   // Filter: only user messages with required fields
   if (msg.message_type !== MessageType.USER) return;
@@ -328,6 +347,10 @@ async function handleMessage(
     const result: CommandResult = routeCommand(ctx);
 
     if (result.handled && result.reply) {
+      // Restart Claude session on /clear so the process gets a fresh context
+      if (userText.startsWith('/clear')) {
+        claudeSession.restart({ resume: undefined });
+      }
       await sender.sendText(fromUserId, contextToken, result.reply);
       return;
     }
@@ -346,6 +369,7 @@ async function handleMessage(
         sender,
         config,
         activeControllers,
+        claudeSession,
       );
       return;
     }
@@ -377,6 +401,7 @@ async function handleMessage(
     sender,
     config,
     activeControllers,
+    claudeSession,
   );
 }
 
@@ -396,12 +421,13 @@ async function sendToClaude(
   sender: ReturnType<typeof createSender>,
   config: ReturnType<typeof loadConfig>,
   activeControllers: Map<string, AbortController>,
+  claudeSession: PersistentSession,
 ): Promise<void> {
   // Set state to processing
   session.state = 'processing';
   sessionStore.save(account.accountId, session);
 
-  // Create abort controller for this query so it can be cancelled by new messages
+  // Create abort controller for this message
   const abortController = new AbortController();
   activeControllers.set(account.accountId, abortController);
 
@@ -410,21 +436,16 @@ async function sendToClaude(
 
   try {
     // Download image if present
-    let images: QueryOptions['images'];
+    let images: SendOptions['images'];
     if (imageItem) {
       const base64DataUri = await downloadImage(imageItem);
       if (base64DataUri) {
-        // Convert data URI to the format Claude expects
         const matches = base64DataUri.match(/^data:([^;]+);base64,(.+)$/);
         if (matches) {
           images = [
             {
               type: 'image',
-              source: {
-                type: 'base64',
-                media_type: matches[1],
-                data: matches[2],
-              },
+              source: { type: 'base64', media_type: matches[1], data: matches[2] },
             },
           ];
         }
@@ -434,16 +455,12 @@ async function sendToClaude(
     const effectivePermissionMode = session.permissionMode ?? config.permissionMode;
     const isAutoPermission = effectivePermissionMode === 'auto';
 
-    // Map 'auto' to bypassPermissions — skips all permission checks in the SDK
-    const sdkPermissionMode = isAutoPermission ? 'bypassPermissions' : effectivePermissionMode;
-
-    // Unified buffer: text deltas and tool summaries all go here
+    // Unified buffer for streaming output
     let pendingBuffer = '';
     let anySent = false;
-    let lastSendTime = Date.now(); // start the clock now, so first delta doesn't fire immediately
+    let lastSendTime = Date.now();
     const SEND_INTERVAL_MS = 36_000;
 
-    // Send everything in pendingBuffer. force=true ignores rate limit.
     async function trySend(force = false): Promise<void> {
       if (!pendingBuffer.trim()) return;
       const now = Date.now();
@@ -458,15 +475,16 @@ async function sendToClaude(
       }
     }
 
-    const queryOptions: QueryOptions = {
-      prompt: userText || '请分析这张图片',
-      cwd: (session.workingDirectory || config.workingDirectory).replace(/^~/, process.env.HOME || ''),
-      resume: session.sdkSessionId,
-      model: session.model,
-      systemPrompt: config.systemPrompt,
-      permissionMode: sdkPermissionMode,
-      abortController,
+    // Ensure session is alive; auto-restart if process died
+    if (!claudeSession.isAlive) {
+      logger.warn('Claude session not alive, restarting');
+      claudeSession.restart();
+    }
+
+    const result = await claudeSession.send({
+      text: userText || '请分析这张图片',
       images,
+      abortSignal: abortController.signal,
       onText: async (delta: string) => {
         pendingBuffer += delta;
         await trySend();
@@ -476,65 +494,37 @@ async function sendToClaude(
         await trySend();
       },
       onPermissionRequest: isAutoPermission
-        ? async () => true  // auto-approve all tools, skip broker
+        ? async () => true
         : async (toolName: string, toolInput: string) => {
-            // Set state to waiting_permission
             session.state = 'waiting_permission';
             sessionStore.save(account.accountId, session);
 
-            // Create pending permission
             const permissionPromise = permissionBroker.createPending(
-              account.accountId,
-              toolName,
-              toolInput,
+              account.accountId, toolName, toolInput,
             );
 
-            // Send permission message to WeChat
             const perm = permissionBroker.getPending(account.accountId);
             if (perm) {
-              const permMsg = permissionBroker.formatPendingMessage(perm);
-              await sender.sendText(fromUserId, contextToken, permMsg);
+              await sender.sendText(fromUserId, contextToken,
+                permissionBroker.formatPendingMessage(perm));
             }
 
             const allowed = await permissionPromise;
-
-            // Reset state after permission resolved
             session.state = 'processing';
             sessionStore.save(account.accountId, session);
-
             return allowed;
           },
-    };
+    });
 
-    let result = await claudeQuery(queryOptions);
-
-    // Only retry without resume for session-specific errors (corrupted/missing session).
-    // Do NOT discard the session on transient errors like auth failures or timeouts.
-    const isSessionError = result.error && queryOptions.resume && (
-      result.error.includes('session') ||
-      result.error.includes('resume') ||
-      result.error.includes('conversation not found') ||
-      result.error.includes('empty response')  // Claude returned nothing, session may be corrupt
-    );
-    if (isSessionError) {
-      logger.warn('Resume failed with session error, retrying without resume', { error: result.error, sessionId: queryOptions.resume });
-      queryOptions.resume = undefined;
-      session.sdkSessionId = undefined;
-      sessionStore.save(account.accountId, session);
-      const retryResult = await claudeQuery(queryOptions);
-      Object.assign(result, retryResult);
-    }
-
-    // Flush any remaining buffered content
+    // Flush remaining buffered content
     await trySend(true);
 
     // Send result back to WeChat
     if (result.text) {
       if (result.error) {
-        logger.warn('Claude query had error but returned text, using text', { error: result.error });
+        logger.warn('Claude had error but returned text, using text', { error: result.error });
       }
       sessionStore.addChatMessage(session, 'assistant', result.text);
-      // If nothing was streamed at all (e.g. streaming not supported), send full text now
       if (!anySent) {
         const chunks = splitMessage(result.text);
         for (const chunk of chunks) {
@@ -542,22 +532,26 @@ async function sendToClaude(
         }
       }
     } else if (result.error) {
-      logger.error('Claude query error', { error: result.error });
+      logger.error('Claude error', { error: result.error });
       await sender.sendText(fromUserId, contextToken, '⚠️ Claude 处理请求时出错，请稍后重试。');
+
+      // If process died, restart session for next message
+      if (!claudeSession.isAlive) {
+        logger.warn('Session died during query, will restart on next message');
+      }
     } else if (!anySent) {
       await sender.sendText(fromUserId, contextToken, 'ℹ️ Claude 无返回内容（可能因权限被拒而终止）');
     }
 
-    // Update session with new SDK session ID; preserve existing if new one is empty
+    // Persist session ID
     if (result.sessionId) {
       session.sdkSessionId = result.sessionId;
     }
     session.state = 'idle';
     sessionStore.save(account.accountId, session);
   } catch (err) {
-    const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('abort'));
+    const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('abort') || err.message.includes('Abort'));
     if (isAbort) {
-      // Query was cancelled by a new incoming message — exit silently
       logger.info('Claude query aborted by new message');
     } else {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -567,7 +561,6 @@ async function sendToClaude(
     session.state = 'idle';
     sessionStore.save(account.accountId, session);
   } finally {
-    // Clean up the abort controller if it's still ours
     if (activeControllers.get(account.accountId) === abortController) {
       activeControllers.delete(account.accountId);
     }
