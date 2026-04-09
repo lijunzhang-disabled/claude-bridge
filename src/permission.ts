@@ -9,6 +9,8 @@ export type OnPermissionTimeout = () => void;
 export function createPermissionBroker(onTimeout?: OnPermissionTimeout) {
   const pending = new Map<string, PendingPermission>();
   const timedOut = new Map<string, number>(); // accountId → timestamp
+  /** Tools auto-approved by the user (reply "a"). Key: `${accountId}:${toolName}` */
+  const alwaysAllowed = new Set<string>();
 
   function createPending(accountId: string, toolName: string, toolInput: string): Promise<boolean> {
     // Clear any existing pending permission for this account to prevent timer leak
@@ -79,9 +81,26 @@ export function createPermissionBroker(onTimeout?: OnPermissionTimeout) {
       `\u5DE5\u5177: ${perm.toolName}`,
       `\u8F93\u5165: ${sanitized}`,
       '',
-      '\u56DE\u590D y \u5141\u8BB8\uFF0Cn \u62D2\u7EDD',
+      '\u56DE\u590D y \u5141\u8BB8\uFF0Cn \u62D2\u7EDD\uFF0Ca \u59CB\u7EC8\u5141\u8BB8\u6B64\u5DE5\u5177',
       '(10\u5206\u949F\u672A\u56DE\u590D\u81EA\u52A8\u62D2\u7EDD)',
     ].join('\n');
+  }
+
+  function addAlwaysAllow(accountId: string, toolName: string): void {
+    alwaysAllowed.add(`${accountId}:${toolName}`);
+    logger.info('Tool auto-approved for future calls', { accountId, toolName });
+  }
+
+  function isAlwaysAllowed(accountId: string, toolName: string): boolean {
+    return alwaysAllowed.has(`${accountId}:${toolName}`);
+  }
+
+  function clearAlwaysAllowed(accountId: string): void {
+    for (const key of alwaysAllowed) {
+      if (key.startsWith(`${accountId}:`)) {
+        alwaysAllowed.delete(key);
+      }
+    }
   }
 
   function rejectPending(accountId: string): boolean {
@@ -94,5 +113,5 @@ export function createPermissionBroker(onTimeout?: OnPermissionTimeout) {
     return true;
   }
 
-  return { createPending, resolvePermission, rejectPending, isTimedOut, clearTimedOut, getPending, formatPendingMessage };
+  return { createPending, resolvePermission, rejectPending, isTimedOut, clearTimedOut, getPending, formatPendingMessage, addAlwaysAllow, isAlwaysAllowed, clearAlwaysAllowed };
 }

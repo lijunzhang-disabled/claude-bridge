@@ -294,7 +294,7 @@ async function handleMessage(
 
   if (session.state === 'idle' && permissionBroker.isTimedOut(account.accountId)) {
     const lower = userText.toLowerCase();
-    if (lower === 'y' || lower === 'yes' || lower === 'n' || lower === 'no') {
+    if (lower === 'y' || lower === 'yes' || lower === 'n' || lower === 'no' || lower === 'a' || lower === 'always') {
       permissionBroker.clearTimedOut(account.accountId);
       await sender.sendText(fromUserId, contextToken, '⏰ 权限请求已超时，请重新发送你的请求。');
       return;
@@ -317,11 +317,16 @@ async function handleMessage(
     if (lower === 'y' || lower === 'yes') {
       const resolved = permissionBroker.resolvePermission(account.accountId, true);
       await sender.sendText(fromUserId, contextToken, resolved ? '✅ 已允许' : '⚠️ 权限请求处理失败，可能已超时');
+    } else if (lower === 'a' || lower === 'always') {
+      const toolName = pendingPerm.toolName;
+      permissionBroker.addAlwaysAllow(account.accountId, toolName);
+      const resolved = permissionBroker.resolvePermission(account.accountId, true);
+      await sender.sendText(fromUserId, contextToken, resolved ? `✅ 已允许，${toolName} 后续将自动批准` : '⚠️ 权限请求处理失败，可能已超时');
     } else if (lower === 'n' || lower === 'no') {
       const resolved = permissionBroker.resolvePermission(account.accountId, false);
       await sender.sendText(fromUserId, contextToken, resolved ? '❌ 已拒绝' : '⚠️ 权限请求处理失败，可能已超时');
     } else {
-      await sender.sendText(fromUserId, contextToken, '正在等待权限审批，请回复 y 或 n。');
+      await sender.sendText(fromUserId, contextToken, '正在等待权限审批，请回复 y、n 或 a（始终允许此工具）。');
     }
     return;
   }
@@ -349,6 +354,7 @@ async function handleMessage(
     if (result.handled && result.reply) {
       // Restart Claude session on /clear so the process gets a fresh context
       if (userText.startsWith('/clear')) {
+        permissionBroker.clearAlwaysAllowed(account.accountId);
         claudeSession.restart({ resume: undefined });
       }
       await sender.sendText(fromUserId, contextToken, result.reply);
@@ -496,6 +502,12 @@ async function sendToClaude(
       onPermissionRequest: isAutoPermission
         ? async () => true
         : async (toolName: string, toolInput: string) => {
+            // Check if this tool was auto-approved by the user
+            if (permissionBroker.isAlwaysAllowed(account.accountId, toolName)) {
+              logger.info('Tool auto-approved', { toolName });
+              return true;
+            }
+
             session.state = 'waiting_permission';
             sessionStore.save(account.accountId, session);
 
