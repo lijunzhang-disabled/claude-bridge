@@ -30,8 +30,20 @@ export function createSender(api: WeChatApi, botAccountId: string) {
     };
 
     logger.info('Sending text message', { toUserId, clientId, textLength: text.length });
-    await api.sendMessage({ msg });
-    logger.info('Text message sent', { toUserId, clientId });
+    try {
+      await api.sendMessage({ msg });
+      logger.info('Text message sent', { toUserId, clientId });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      // WAF blocks (HTTP 566) and other send failures should not crash the caller.
+      // Log and continue so Claude's processing is not interrupted.
+      if (errMsg.includes('566') || errMsg.includes('EdgeOne') || errMsg.includes('security')) {
+        logger.warn('Message blocked by WAF, skipping', { clientId, textLength: text.length });
+      } else {
+        logger.error('Failed to send message', { clientId, error: errMsg });
+        throw err; // re-throw non-WAF errors
+      }
+    }
   }
 
   return { sendText };

@@ -259,7 +259,8 @@ export class PersistentSession {
         }
         return { behavior: "deny", message: "Permission denied by user.", interrupt: true };
       } catch (err) {
-        logger.error("Permission handler error", { toolName, err });
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logger.error("Permission handler error", { toolName, error: errMsg });
         return { behavior: "deny", message: "Permission check failed.", interrupt: true };
       }
     };
@@ -378,6 +379,10 @@ export class PersistentSession {
             } else if ("errors" in rm && rm.errors.length > 0) {
               errorMessage = rm.errors.join("; ");
               logger.error("SDK returned error result", { errors: rm.errors });
+              // Error results typically mean the process exited.
+              // Mark as dead so next send() triggers auto-restart.
+              this.alive = false;
+              logger.warn("Marking session as dead after error result");
             }
             // Turn complete
             const fullText = textParts.join("\n").trim();
