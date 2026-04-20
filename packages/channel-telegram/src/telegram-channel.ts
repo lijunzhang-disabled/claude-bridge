@@ -110,15 +110,18 @@ export class TelegramChannel implements Channel {
         return;
       }
 
+      logger.info('Telegram message received', { from, text: (ctx.message?.text ?? '').slice(0, 60) });
       const inbound = await this.translateInbound(ctx);
-      if (inbound) {
-        try {
-          await onMessage(inbound);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          logger.error('Error handling telegram message', { error: msg });
-        }
-      }
+      if (!inbound) return;
+
+      // Fire-and-forget so grammy can continue fetching updates while Claude
+      // processes this message. Otherwise a permission prompt would deadlock:
+      // the user's y/n/a reply wouldn't be received until the first handler
+      // finished, but the first handler is blocked waiting for that reply.
+      onMessage(inbound).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error('Error handling telegram message', { error: msg });
+      });
     });
 
     bot.catch((err) => {

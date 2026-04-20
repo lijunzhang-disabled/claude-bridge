@@ -58,7 +58,7 @@ export class WeChatChannel implements Channel {
   async setup(): Promise<void> {
     mkdirSync(DATA_DIR, { recursive: true });
     const QR_PATH = join(DATA_DIR, 'qrcode.png');
-    console.log('正在设置...\n');
+    console.log('Setting up WeChat...\n');
 
     while (true) {
       const { qrcodeUrl, qrcodeId } = await startQrLogin();
@@ -68,31 +68,31 @@ export class WeChatChannel implements Channel {
       if (isHeadlessLinux) {
         try {
           const qrcodeTerminal = await import('qrcode-terminal');
-          console.log('请用微信扫描下方二维码：\n');
+          console.log('Scan the QR code below with WeChat:\n');
           qrcodeTerminal.default.generate(qrcodeUrl, { small: true });
-          console.log('\n二维码链接：', qrcodeUrl, '\n');
+          console.log('\nQR code URL:', qrcodeUrl, '\n');
         } catch {
           logger.warn('qrcode-terminal not available, falling back to URL');
-          console.log('无法在终端显示二维码，请访问链接：\n' + qrcodeUrl + '\n');
+          console.log('Could not render QR in terminal. Open this URL instead:\n' + qrcodeUrl + '\n');
         }
       } else {
         const QRCode = await import('qrcode');
         const pngData = await QRCode.toBuffer(qrcodeUrl, { type: 'png', width: 400, margin: 2 });
         writeFileSync(QR_PATH, pngData);
         openFile(QR_PATH);
-        console.log('已打开二维码图片，请用微信扫描：');
-        console.log(`图片路径: ${QR_PATH}\n`);
+        console.log('QR code image opened — scan it with WeChat.');
+        console.log(`Image path: ${QR_PATH}\n`);
       }
 
-      console.log('等待扫码绑定...');
+      console.log('Waiting for QR scan...');
 
       try {
         await waitForQrScan(qrcodeId);
-        console.log('✅ 绑定成功!');
+        console.log('✅ Bound successfully!');
         break;
       } catch (err: any) {
         if (err.message?.includes('expired')) {
-          console.log('⚠️ 二维码已过期，正在刷新...\n');
+          console.log('⚠️ QR code expired, refreshing...\n');
           continue;
         }
         throw err;

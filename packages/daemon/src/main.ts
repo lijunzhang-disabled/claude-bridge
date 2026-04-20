@@ -81,13 +81,13 @@ async function runSetup(channelName: string): Promise<void> {
   const channel = createChannel(channelName);
   await channel.setup();
 
-  const workingDir = await promptUser('请输入工作目录', process.cwd());
+  const workingDir = await promptUser('Working directory', process.cwd());
   const config = loadConfig();
   config.workingDirectory = workingDir;
   config.channel = channelName;
   saveConfig(config);
 
-  console.log('运行 npm run daemon -- start 启动服务');
+  console.log('Setup complete. Run: npm run daemon -- start');
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ async function runDaemon(): Promise<void> {
 
   const account = channel.loadAccount();
   if (!account) {
-    console.error(`未找到账号，请先运行 setup (channel=${channelName})`);
+    console.error(`No account found. Run: npm run setup -- ${channelName}`);
     process.exit(1);
   }
 
@@ -139,7 +139,7 @@ async function runDaemon(): Promise<void> {
   const activeAbortControllers = new Map<string, AbortController>();
   const permissionBroker = createPermissionBroker(async () => {
     try {
-      await channel.sendText(account.userId ?? '', sharedCtx.lastContextToken, '⏰ 权限请求超时，已自动拒绝。');
+      await channel.sendText(account.userId ?? '', sharedCtx.lastContextToken, '⏰ Permission request timed out, auto-denied.');
     } catch {
       logger.warn('Failed to send permission timeout message');
     }
@@ -156,7 +156,7 @@ async function runDaemon(): Promise<void> {
   process.on('SIGTERM', shutdown);
 
   logger.info('Daemon started', { accountId: account.accountId, channel: channelName });
-  console.log(`已启动 (${channelName} 账号: ${account.accountId})`);
+  console.log(`Started (channel=${channelName}, account=${account.accountId})`);
 
   await channel.start(
     async (msg: InboundMessage) => {
@@ -164,7 +164,7 @@ async function runDaemon(): Promise<void> {
     },
     () => {
       logger.warn('Channel session expired');
-      console.error('⚠️ 会话已过期，请重新运行 setup');
+      console.error('⚠️ Channel session expired. Please re-run setup.');
     },
   );
 }
@@ -215,7 +215,7 @@ async function handleMessage(
     const lower = userText.toLowerCase();
     if (lower === 'y' || lower === 'yes' || lower === 'n' || lower === 'no' || lower === 'a' || lower === 'always') {
       permissionBroker.clearTimedOut(accountId);
-      await channel.sendText(fromUserId, contextToken, '⏰ 权限请求已超时，请重新发送你的请求。');
+      await channel.sendText(fromUserId, contextToken, '⏰ Permission request already timed out. Please resend your request.');
       return;
     }
   }
@@ -226,24 +226,24 @@ async function handleMessage(
     if (!pendingPerm) {
       session.state = 'idle';
       sessionStore.save(accountId, session);
-      await channel.sendText(fromUserId, contextToken, '⚠️ 权限请求已失效（可能因服务重启），请重新发送你的请求。');
+      await channel.sendText(fromUserId, contextToken, '⚠️ Permission request lost (likely due to a daemon restart). Please resend your request.');
       return;
     }
 
     const lower = userText.toLowerCase();
     if (lower === 'y' || lower === 'yes') {
       const resolved = permissionBroker.resolvePermission(accountId, true);
-      await channel.sendText(fromUserId, contextToken, resolved ? '✅ 已允许' : '⚠️ 权限请求处理失败，可能已超时');
+      await channel.sendText(fromUserId, contextToken, resolved ? '✅ Allowed' : '⚠️ Failed to resolve permission — may have timed out');
     } else if (lower === 'a' || lower === 'always') {
       const toolName = pendingPerm.toolName;
       permissionBroker.addAlwaysAllow(accountId, toolName);
       const resolved = permissionBroker.resolvePermission(accountId, true);
-      await channel.sendText(fromUserId, contextToken, resolved ? `✅ 已允许，${toolName} 后续将自动批准` : '⚠️ 权限请求处理失败，可能已超时');
+      await channel.sendText(fromUserId, contextToken, resolved ? `✅ Allowed. ${toolName} will be auto-approved from now on.` : '⚠️ Failed to resolve permission — may have timed out');
     } else if (lower === 'n' || lower === 'no') {
       const resolved = permissionBroker.resolvePermission(accountId, false);
-      await channel.sendText(fromUserId, contextToken, resolved ? '❌ 已拒绝' : '⚠️ 权限请求处理失败，可能已超时');
+      await channel.sendText(fromUserId, contextToken, resolved ? '❌ Denied' : '⚠️ Failed to resolve permission — may have timed out');
     } else {
-      await channel.sendText(fromUserId, contextToken, '正在等待权限审批，请回复 y、n 或 a（始终允许此工具）。');
+      await channel.sendText(fromUserId, contextToken, 'Waiting for permission approval. Reply y, n, or a (always allow this tool).');
     }
     return;
   }
@@ -290,7 +290,7 @@ async function handleMessage(
 
   // Normal message -> Claude
   if (!userText && !images?.length) {
-    await channel.sendText(fromUserId, contextToken, '暂不支持此类型消息，请发送文字或图片');
+    await channel.sendText(fromUserId, contextToken, 'Unsupported message type. Send text or an image.');
     return;
   }
 
@@ -409,12 +409,12 @@ async function sendToClaude(
       }
     } else if (result.error) {
       logger.error('Claude error', { error: result.error });
-      await channel.sendText(fromUserId, contextToken, '⚠️ Claude 处理请求时出错，请稍后重试。');
+      await channel.sendText(fromUserId, contextToken, '⚠️ Claude errored while processing. Please try again.');
       if (!claudeSession.isAlive) {
         logger.warn('Session died during query, will restart on next message');
       }
     } else if (!anySent) {
-      await channel.sendText(fromUserId, contextToken, 'ℹ️ Claude 无返回内容（可能因权限被拒而终止）');
+      await channel.sendText(fromUserId, contextToken, 'ℹ️ Claude returned no content (possibly terminated by permission denial).');
     }
 
     if (result.sessionId) {
@@ -429,7 +429,7 @@ async function sendToClaude(
     } else {
       const errorMsg = err instanceof Error ? err.message : String(err);
       logger.error('Error in sendToClaude', { error: errorMsg });
-      await channel.sendText(fromUserId, contextToken, '⚠️ 处理消息时出错，请稍后重试。');
+      await channel.sendText(fromUserId, contextToken, '⚠️ Error processing message. Please try again.');
     }
     session.state = 'idle';
     sessionStore.save(accountId, session);
@@ -450,13 +450,13 @@ const channelArg = process.argv[3] ?? 'wechat';
 if (command === 'setup') {
   runSetup(channelArg).catch((err) => {
     logger.error('Setup failed', { error: err instanceof Error ? err.message : String(err) });
-    console.error('设置失败:', err);
+    console.error('Setup failed:', err);
     process.exit(1);
   });
 } else {
   runDaemon().catch((err) => {
     logger.error('Daemon start failed', { error: err instanceof Error ? err.message : String(err) });
-    console.error('启动失败:', err);
+    console.error('Daemon start failed:', err);
     process.exit(1);
   });
 }

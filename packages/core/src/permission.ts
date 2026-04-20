@@ -76,13 +76,13 @@ export function createPermissionBroker(onTimeout?: OnPermissionTimeout) {
   function formatPendingMessage(perm: PendingPermission): string {
     const sanitized = sanitizeForWAF(perm.toolInput.slice(0, 200));
     return [
-      '\u{1F527} \u6743\u9650\u8BF7\u6C42',
+      '🔧 Permission request',
       '',
-      `\u5DE5\u5177: ${perm.toolName}`,
-      `\u8F93\u5165: ${sanitized}`,
+      `Tool: ${perm.toolName}`,
+      `Input: ${sanitized}`,
       '',
-      '\u56DE\u590D y \u5141\u8BB8\uFF0Cn \u62D2\u7EDD\uFF0Ca \u59CB\u7EC8\u5141\u8BB8\u6B64\u5DE5\u5177',
-      '(10\u5206\u949F\u672A\u56DE\u590D\u81EA\u52A8\u62D2\u7EDD)',
+      'Reply: y = allow, n = deny, a = always allow this tool',
+      '(Auto-denied after 10 minutes of no reply)',
     ].join('\n');
   }
 
