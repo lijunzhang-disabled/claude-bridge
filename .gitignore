@@ -1,5 +1,7 @@
 node_modules/
 dist/
+*.tsbuildinfo
 *.log
 .env
 .wechat-claude-code/
+.claude-bridge/

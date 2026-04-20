@@ -7,6 +7,8 @@ export interface Config {
   model?: string;
   permissionMode?: "default" | "acceptEdits" | "plan" | "auto";
   systemPrompt?: string;
+  /** Which channel adapter to use (e.g. "wechat", "telegram"). Defaults to "wechat". */
+  channel?: string;
 }
 
 const CONFIG_DIR = join(homedir(), ".wechat-claude-code");
@@ -49,6 +51,9 @@ function parseConfigFile(content: string): Config {
       case "systemPrompt":
         config.systemPrompt = value;
         break;
+      case "channel":
+        config.channel = value;
+        break;
     }
   }
   return config;
@@ -76,6 +81,9 @@ export function saveConfig(config: Config): void {
   }
   if (config.systemPrompt) {
     lines.push(`systemPrompt=${config.systemPrompt}`);
+  }
+  if (config.channel) {
+    lines.push(`channel=${config.channel}`);
   }
   writeFileSync(CONFIG_PATH, lines.join("\n") + "\n", "utf-8");
   if (process.platform !== 'win32') {

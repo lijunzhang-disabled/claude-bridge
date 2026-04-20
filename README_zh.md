@@ -1,56 +1,68 @@
-# wechat-claude-code
+# claude-bridge
 
 [English](README.md) | **中文**
 
-一个 [Claude Code](https://claude.ai/claude-code) Skill，将个人微信桥接到本地 Claude Code。通过手机微信与 Claude 对话——文字、图片、权限审批、斜杠命令，全部支持。
+将聊天平台桥接到本地 [Claude Code](https://claude.ai/claude-code)。在手机上通过微信、Telegram、Discord 等与 Claude 对话——文字、图片、权限审批、斜杠命令全部支持。当前已支持微信，Telegram/Discord 通过实现 Channel 接口即可加入。
+
+> **致谢。** 本项目源自 [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code) 的 fork，之后进行了较大改动：重构为 monorepo + channel 适配器架构；迁移到 persistent session 模型（一个长期运行的 Claude 进程替代每条消息新起进程）；修复了多个生产问题（iLink 协议头、IDC 重定向、WAF 清洗、会话恢复、"始终允许"权限等）。完整改动见 `git log`。
 
 ## 功能特性
 
+- **Channel 适配器架构** — 当前支持微信，添加 Telegram/Discord 只需实现 `Channel` 接口
+- **持久化 Claude 会话** — 一个长期运行的 Claude Code 进程在内存中保留上下文，不再每条消息都起新进程
 - **实时进度推送** — 实时查看 Claude 的工具调用（🔧 Bash、📖 Read、🔍 Glob…）
-- **思考预览** — 每次工具调用前展示 💭 Claude 的推理摘要（前 300 字）
+- **思考预览** — 每次工具调用前展示 💭 Claude 的推理摘要
 - **中断支持** — 在 Claude 处理中发送新消息可打断当前任务
-- **系统提示词** — 通过 `/prompt` 设置持久化提示词（如"用中文回答"）
-- 通过微信与 Claude Code 进行文字对话
-- 图片识别——发送照片让 Claude 分析
-- 权限审批——在微信中回复 `y`/`n` 控制工具执行
-- 斜杠命令——`/help`、`/clear`、`/model`、`/prompt`、`/status`、`/skills` 等
-- 在微信中触发任意已安装的 Claude Code Skill
-- 跨平台——macOS（launchd）、Linux（systemd + nohup 回退）
-- 会话持久化——跨消息恢复上下文
-- 限频保护——微信 API 限频时自动指数退避重试
+- **权限审批** — 聊天中回复 `y`（允许）、`n`（拒绝）、`a`（始终允许此工具）
+- **图片识别** — 发送照片让 Claude 分析
+- **斜杠命令** — `/help`、`/clear`、`/model`、`/prompt`、`/status`、`/skills` 等
+- **跨平台** — macOS（launchd）、Linux（systemd + nohup 回退）
+
+## 仓库结构
+
+```
+claude-bridge/
+├── packages/
+│   ├── core/              # 与 channel 无关：PersistentSession、权限 broker、命令
+│   ├── channel-wechat/    # 微信适配器（iLink bot API）
+│   └── daemon/            # 编排层 —— 选择 channel，运行消息循环
+├── scripts/
+│   └── daemon.sh          # 跨平台服务管理脚本
+└── packages/<pkg>/src/    # 每个 package 的 TypeScript 源码
+```
 
 ## 前置条件
 
 - Node.js >= 18
 - macOS 或 Linux
-- 个人微信账号（需扫码绑定）。请先将微信更新到最新版本，并在 设置 → 插件 中启用 ClawBot（龙虾）插件。
 - 已安装 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（含 `@anthropic-ai/claude-agent-sdk`）
-  > **注意：** 该 SDK 支持第三方 API 提供商（如 OpenRouter、AWS Bedrock、自定义 OpenAI 兼容接口）——按需设置 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_API_KEY` 即可。
+  > **注意：** 该 SDK 支持第三方 API 提供商（OpenRouter、AWS Bedrock、自定义 OpenAI 兼容接口）——按需设置 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_API_KEY` 即可。
+
+### Channel 特定前置条件
+
+- **微信**：个人微信账号。请先将微信更新到最新版本，并在 设置 → 插件 中启用 ClawBot（龙虾）插件。
 
 ## 安装
 
-克隆到 Claude Code skills 目录：
-
 ```bash
-git clone https://github.com/Wechat-ggGitHub/wechat-claude-code.git ~/.claude/skills/wechat-claude-code
-cd ~/.claude/skills/wechat-claude-code
+git clone https://github.com/lijunzhang-disabled/claude-bridge.git ~/.claude/skills/claude-bridge
+cd ~/.claude/skills/claude-bridge
 npm install
 ```
 
-`postinstall` 脚本会自动编译 TypeScript。
+`postinstall` 脚本会自动通过 `tsc -b` 编译所有 package。
 
 ## 快速开始
 
 ### 1. 首次设置
 
-扫码绑定微信账号：
-
 ```bash
-cd ~/.claude/skills/wechat-claude-code
-npm run setup
+npm run setup           # 默认使用 wechat
+# 或显式指定：
+npm run setup -- wechat
 ```
 
-会自动弹出二维码图片，用微信扫码后配置工作目录。
+微信：会自动弹出二维码图片，用微信扫码后配置工作目录。
 
 ### 2. 启动服务
 
@@ -58,89 +70,110 @@ npm run setup
 npm run daemon -- start
 ```
 
-- **macOS**：注册 launchd 代理，实现开机自启和自动重启
-- **Linux**：使用 systemd 用户服务（无 systemd 时回退到 nohup）
+- **macOS**：注册 launchd agent，开机自启 + 崩溃自动重启
+- **Linux**：使用 systemd user service（不可用时回退到 nohup）
 
-### 3. 在微信中聊天
+### 3. 聊天
 
-直接在微信中发消息即可与 Claude Code 对话。
+在对应的聊天应用中发送任何消息即可开始与 Claude Code 对话。
 
-### 4. 管理服务
+### 4. 服务管理
 
 ```bash
-npm run daemon -- status   # 查看运行状态
-npm run daemon -- stop     # 停止服务
-npm run daemon -- restart  # 重启服务（代码更新后使用）
-npm run daemon -- logs     # 查看最近日志
+npm run daemon -- status
+npm run daemon -- stop
+npm run daemon -- restart
+npm run daemon -- logs
 ```
 
-## 微信端命令
+## 聊天命令
 
 | 命令 | 说明 |
 |------|------|
-| `/help` | 显示帮助 |
-| `/clear` | 清除当前会话（重新开始） |
-| `/reset` | 完全重置（包括工作目录等设置） |
+| `/help` | 查看可用命令 |
+| `/clear` | 清除当前会话 |
+| `/reset` | 完全重置（包括工作目录） |
 | `/model <名称>` | 切换 Claude 模型 |
 | `/permission <模式>` | 切换权限模式 |
-| `/prompt [内容]` | 查看或设置系统提示词（全局生效） |
-| `/status` | 查看当前会话状态 |
+| `/prompt [文本]` | 查看或设置附加到每次查询的系统提示词 |
+| `/status` | 查看会话状态 |
 | `/cwd [路径]` | 查看或切换工作目录 |
-| `/skills` | 列出已安装的 Claude Code Skill |
-| `/history [数量]` | 查看最近 N 条对话记录 |
-| `/compact` | 压缩上下文（开始新 SDK 会话，保留历史） |
-| `/undo [数量]` | 撤销最近 N 条对话 |
-| `/<skill> [参数]` | 触发任意已安装的 Skill |
+| `/skills` | 列出已安装的 Claude Code skills |
+| `/history [n]` | 查看最近 N 条对话 |
+| `/compact` | 开启新 SDK 会话 |
+| `/undo [n]` | 删除最近 N 条历史 |
+| `/<skill> [参数]` | 触发已安装的 skill |
 
 ## 权限审批
 
-当 Claude 请求执行工具时，微信会收到权限请求：
+Claude 请求执行工具时，你会收到权限请求：
 
-- 回复 `y` 或 `yes` 允许
-- 回复 `n` 或 `no` 拒绝
-- 120 秒未回复自动拒绝
+- `y` 或 `yes` — 本次允许
+- `n` 或 `no` — 拒绝
+- `a` 或 `always` — 允许并自动批准后续所有对此工具的调用（本次会话）
+- 10 分钟内未回复视为拒绝
 
-通过 `/permission <模式>` 切换权限模式：
+通过 `/permission <模式>` 切换模式：
 
 | 模式 | 说明 |
 |------|------|
-| `default` | 每次工具使用需手动审批 |
-| `acceptEdits` | 自动批准文件编辑，其他需审批 |
+| `default` | 每次工具调用都需手动批准 |
+| `acceptEdits` | 自动批准文件编辑，其他工具需要审批 |
 | `plan` | 只读模式，不允许任何工具 |
 | `auto` | 自动批准所有工具（危险模式） |
 
-## 工作原理
+## 架构
 
 ```
-微信（手机） ←→ ilink bot API ←→ Node.js 守护进程 ←→ Claude Code SDK（本地）
+聊天平台  ←→  Channel 适配器  ←→  Daemon  ←→  PersistentSession  ←→  Claude Code
+(微信 /            (实现 Channel         (消息编排、         (单一长期运行的
+ Telegram /         接口)                 权限)              claude 进程，
+ Discord)                                                     上下文在内存)
 ```
 
-- 守护进程通过长轮询监听微信 ilink bot API 的新消息
-- 消息通过 `@anthropic-ai/claude-agent-sdk` 转发给 Claude Code
-- 工具调用和思考摘要在 Claude 工作时实时推送
-- 回复发送回微信，限频时自动重试
-- 平台原生服务管理保持守护进程运行（macOS 使用 launchd，Linux 使用 systemd/nohup）
+- Daemon 按照配置从对应 channel 拉取入站消息
+- 消息通过 streaming input 转发给单一的长期运行 Claude Code 进程
+- Claude 工作过程中，工具调用和思考预览实时回传
+- 响应通过同一个 channel 适配器返回
 
-## 数据目录
+### 添加新 channel
 
-所有数据存储在 `~/.wechat-claude-code/`：
+实现 `@claude-bridge/core` 中的 `Channel` 接口：
+
+```typescript
+export interface Channel {
+  readonly name: string;
+  setup(): Promise<void>;
+  loadAccount(): AccountInfo | null;
+  start(onMessage, onSessionExpired?): Promise<void>;
+  stop(): void;
+  sendText(to: string, contextToken: string, text: string): Promise<void>;
+}
+```
+
+参考实现：`packages/channel-wechat/src/wechat-channel.ts`。
+
+## 数据存储
+
+所有数据存放在 `~/.wechat-claude-code/`（为与上游项目兼容沿用该目录）：
 
 ```
 ~/.wechat-claude-code/
-├── accounts/       # 微信账号凭证（每个账号一个 JSON）
-├── config.env      # 全局配置（工作目录、模型、权限模式、系统提示词）
-├── sessions/       # 会话数据（每个账号一个 JSON）
-├── get_updates_buf # 消息轮询同步缓冲
-└── logs/           # 运行日志（每日轮转，保留 30 天）
+├── accounts/       # channel 账号凭证
+├── config.env      # 全局配置（channel、工作目录、模型、权限模式、系统提示词）
+├── sessions/       # 每账号会话数据
+├── get_updates_buf # 微信消息轮询同步 buffer
+└── logs/           # 滚动日志（每日一份，保留 30 天）
 ```
 
 ## 开发
 
 ```bash
-npm run dev    # 监听模式——TypeScript 文件变更时自动编译
-npm run build  # 编译 TypeScript
+npm run build    # 编译所有 package
+npm run dev      # watch 模式，自动编译
+npm run clean    # 清空所有 dist/
 ```
 
-## License
+## 许可证
 
-[MIT](LICENSE)
+[MIT](LICENSE) —— 完整条款见 `LICENSE`。Fork 自 [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code)（同为 MIT）。

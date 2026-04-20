@@ -3,7 +3,7 @@ import type {
   SendMessageReq,
   GetUploadUrlResp,
 } from './types.js';
-import { logger } from '../logger.js';
+import { logger } from '@claude-bridge/core';
 import { ILINK_COMMON_HEADERS, CHANNEL_VERSION } from './protocol.js';
 
 /** Generate a random uint32 and return its base64 representation. */

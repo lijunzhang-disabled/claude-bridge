@@ -1,6 +1,6 @@
 import { WeChatApi } from './api.js';
 import { loadSyncBuf, saveSyncBuf } from './sync-buf.js';
-import { logger } from '../logger.js';
+import { logger } from '@claude-bridge/core';
 import type { WeixinMessage } from './types.js';
 
 const SESSION_EXPIRED_ERRCODE = -14;

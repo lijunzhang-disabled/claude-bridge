@@ -61,7 +61,7 @@ macos_start() {
   <key>ProgramArguments</key>
   <array>
     <string>${node_bin}</string>
-    <string>${PROJECT_DIR}/dist/main.js</string>
+    <string>${PROJECT_DIR}/packages/daemon/dist/main.js</string>
     <string>start</string>
   </array>
   <key>WorkingDirectory</key>
@@ -98,7 +98,7 @@ macos_stop() {
 
 macos_status() {
   if macos_is_loaded; then
-    local pid=$(pgrep -f "dist/main.js start" 2>/dev/null | head -1)
+    local pid=$(pgrep -f "packages/daemon/dist/main.js start" 2>/dev/null | head -1)
     if [ -n "$pid" ]; then
       echo "Running (PID: $pid)"
     else
@@ -190,7 +190,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${node_bin} ${PROJECT_DIR}/dist/main.js start
+ExecStart=${node_bin} ${PROJECT_DIR}/packages/daemon/dist/main.js start
 WorkingDirectory=${PROJECT_DIR}
 Restart=always
 RestartSec=10
@@ -228,7 +228,7 @@ linux_direct_start() {
   mkdir -p "$DATA_DIR/logs"
 
   echo "Starting wechat-claude-code daemon (direct mode)..."
-  nohup "$node_bin" "${PROJECT_DIR}/dist/main.js" start \
+  nohup "$node_bin" "${PROJECT_DIR}/packages/daemon/dist/main.js" start \
     >> "$DATA_DIR/logs/stdout.log" \
     2>> "$DATA_DIR/logs/stderr.log" &
   local pid=$!

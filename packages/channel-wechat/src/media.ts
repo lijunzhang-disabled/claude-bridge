@@ -1,7 +1,7 @@
 import type { MessageItem, ImageItem } from './types.js';
 import { MessageItemType } from './types.js';
 import { downloadAndDecrypt } from './cdn.js';
-import { logger } from '../logger.js';
+import { logger } from '@claude-bridge/core';
 
 function detectMimeType(data: Buffer): string {
   if (data[0] === 0x89 && data[1] === 0x50) return 'image/png';

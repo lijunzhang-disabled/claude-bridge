@@ -1,6 +1,6 @@
 import { WeChatApi } from './api.js';
 import { MessageItemType, MessageType, MessageState, type MessageItem, type OutboundMessage } from './types.js';
-import { logger } from '../logger.js';
+import { logger } from '@claude-bridge/core';
 
 function sanitizeForWAF(text: string): string {
   // Strip patterns that trigger Tencent EdgeOne WAF (SQL keywords, shell paths)

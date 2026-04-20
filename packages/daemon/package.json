@@ -1,0 +1,25 @@
+{
+  "name": "@claude-bridge/daemon",
+  "version": "1.0.0",
+  "description": "Claude Bridge daemon — message loop, channel orchestration",
+  "type": "module",
+  "main": "./dist/main.js",
+  "bin": {
+    "claude-bridge": "./dist/main.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "start": "node dist/main.js",
+    "setup": "node dist/main.js setup"
+  },
+  "dependencies": {
+    "@claude-bridge/core": "*",
+    "@claude-bridge/channel-wechat": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,6 +1,6 @@
 import type { AccountData } from './accounts.js';
 import { DEFAULT_BASE_URL, saveAccount } from './accounts.js';
-import { logger } from '../logger.js';
+import { logger } from '@claude-bridge/core';
 import { ILINK_COMMON_HEADERS } from './protocol.js';
 
 const QR_CODE_URL = `${DEFAULT_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3`;

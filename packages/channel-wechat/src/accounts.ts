@@ -1,8 +1,7 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { readdirSync, statSync } from 'node:fs';
-import { loadJson, saveJson } from '../store.js';
-import { logger } from '../logger.js';
+import { loadJson, saveJson, logger } from '@claude-bridge/core';
 
 export const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
 export const CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';

@@ -1,5 +1,5 @@
 import { decryptAesEcb } from "./crypto.js";
-import { logger } from "../logger.js";
+import { logger } from "@claude-bridge/core";
 import { CDN_BASE_URL } from "./accounts.js";
 
 export function buildCdnDownloadUrl(encryptQueryParam: string): string {
