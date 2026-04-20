@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/channel-wechat" },
+    { "path": "packages/channel-telegram" },
     { "path": "packages/daemon" }
   ]
 }

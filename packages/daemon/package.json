@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "@claude-bridge/core": "*",
-    "@claude-bridge/channel-wechat": "*"
+    "@claude-bridge/channel-wechat": "*",
+    "@claude-bridge/channel-telegram": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

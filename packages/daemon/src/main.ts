@@ -20,6 +20,7 @@ import {
 } from '@claude-bridge/core';
 
 import { WeChatChannel } from '@claude-bridge/channel-wechat';
+import { TelegramChannel } from '@claude-bridge/channel-telegram';
 
 // ---------------------------------------------------------------------------
 // Channel selection
@@ -29,8 +30,10 @@ function createChannel(name: string): Channel {
   switch (name) {
     case 'wechat':
       return new WeChatChannel();
+    case 'telegram':
+      return new TelegramChannel();
     default:
-      throw new Error(`Unknown channel: ${name}. Supported: wechat`);
+      throw new Error(`Unknown channel: ${name}. Supported: wechat, telegram`);
   }
 }
 

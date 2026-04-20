@@ -7,8 +7,6 @@
   },
   "include": ["src/**/*"],
   "references": [
-    { "path": "../core" },
-    { "path": "../channel-wechat" },
-    { "path": "../channel-telegram" }
+    { "path": "../core" }
   ]
 }
