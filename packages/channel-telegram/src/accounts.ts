@@ -12,6 +12,8 @@ export interface TelegramAccountData {
   botUsername: string;
   /** The Telegram user ID the bot is locked to (accept messages only from them) */
   ownerUserId: number;
+  /** Working directory this bot operates in (each bot = one project) */
+  workingDirectory: string;
   createdAt: string;
 }
 
@@ -68,5 +70,16 @@ export function loadLatestTelegramAccount(): { id: string; data: TelegramAccount
     return data ? { id, data } : null;
   } catch {
     return null;
+  }
+}
+
+/** List all configured telegram account IDs. Returns empty array if none. */
+export function listTelegramAccountIds(): string[] {
+  try {
+    return readdirSync(ACCOUNTS_DIR)
+      .filter((f) => f.startsWith('telegram-') && f.endsWith('.json'))
+      .map((f) => f.replace(/\.json$/, ''));
+  } catch {
+    return [];
   }
 }

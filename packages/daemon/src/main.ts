@@ -20,21 +20,56 @@ import {
 } from '@claude-bridge/core';
 
 import { WeChatChannel } from '@claude-bridge/channel-wechat';
-import { TelegramChannel } from '@claude-bridge/channel-telegram';
+import { TelegramChannel, listTelegramAccountIds } from '@claude-bridge/channel-telegram';
 
 // ---------------------------------------------------------------------------
 // Channel selection
 // ---------------------------------------------------------------------------
 
-function createChannel(name: string): Channel {
+function createChannel(name: string, accountId?: string): Channel {
   switch (name) {
     case 'wechat':
       return new WeChatChannel();
     case 'telegram':
-      return new TelegramChannel();
+      return new TelegramChannel(accountId);
     default:
       throw new Error(`Unknown channel: ${name}. Supported: wechat, telegram`);
   }
+}
+
+/**
+ * Return all configured account IDs for a channel. An empty array means
+ * the user has not yet run setup. A single-element array is normal for
+ * channels where one account is the natural model (e.g. WeChat).
+ */
+function listAccountIdsForChannel(name: string): string[] {
+  switch (name) {
+    case 'telegram':
+      return listTelegramAccountIds();
+    case 'wechat': {
+      // WeChat stays single-account: load the latest and report its ID.
+      const probe = new WeChatChannel();
+      const acc = probe.loadAccount();
+      return acc ? [acc.accountId] : [];
+    }
+    default:
+      return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Per-bot instance — holds everything a single bot needs
+// ---------------------------------------------------------------------------
+
+interface BotInstance {
+  accountId: string;
+  userId?: string;
+  channel: Channel;
+  claudeSession: PersistentSession;
+  session: Session;
+  sharedCtx: { lastContextToken: string };
+  activeAbortControllers: Map<string, AbortController>;
+  permissionBroker: ReturnType<typeof createPermissionBroker>;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,76 +132,116 @@ async function runSetup(channelName: string): Promise<void> {
 async function runDaemon(): Promise<void> {
   const config = loadConfig();
   const channelName = config.channel || 'wechat';
-  const channel = createChannel(channelName);
+  const sessionStore = createSessionStore();
 
-  const account = channel.loadAccount();
-  if (!account) {
-    console.error(`No account found. Run: npm run setup -- ${channelName}`);
+  const accountIds = listAccountIdsForChannel(channelName);
+  if (accountIds.length === 0) {
+    console.error(`No accounts found. Run: npm run setup -- ${channelName}`);
     process.exit(1);
   }
 
-  const sessionStore = createSessionStore();
-  const session: Session = sessionStore.load(account.accountId);
+  const instances: BotInstance[] = [];
 
-  if (config.workingDirectory && session.workingDirectory === process.cwd()) {
-    session.workingDirectory = config.workingDirectory;
-    sessionStore.save(account.accountId, session);
-  }
-
-  if (session.state !== 'idle') {
-    logger.warn('Resetting stale session state on startup', { state: session.state });
-    session.state = 'idle';
-    sessionStore.save(account.accountId, session);
-  }
-
-  // -- Persistent Claude session --
-  const effectivePermissionMode = session.permissionMode ?? config.permissionMode;
-  const isAutoPermission = effectivePermissionMode === 'auto';
-  const sdkPermissionMode = isAutoPermission ? 'bypassPermissions' as const : effectivePermissionMode;
-  const cwd = (session.workingDirectory || config.workingDirectory || process.cwd())
-    .replace(/^~/, process.env.HOME || '');
-
-  const claudeSession = new PersistentSession({
-    cwd,
-    model: session.model,
-    systemPrompt: config.systemPrompt,
-    permissionMode: sdkPermissionMode,
-    resume: session.sdkSessionId,
-  });
-  claudeSession.start();
-
-  const sharedCtx = { lastContextToken: '' };
-  const activeAbortControllers = new Map<string, AbortController>();
-  const permissionBroker = createPermissionBroker(async () => {
-    try {
-      await channel.sendText(account.userId ?? '', sharedCtx.lastContextToken, '⏰ Permission request timed out, auto-denied.');
-    } catch {
-      logger.warn('Failed to send permission timeout message');
+  for (const accountId of accountIds) {
+    const channel = createChannel(channelName, accountId);
+    const account = channel.loadAccount();
+    if (!account) {
+      logger.warn('Skipping account — failed to load', { accountId });
+      continue;
     }
-  });
+
+    const session: Session = sessionStore.load(account.accountId);
+
+    // Backfill session.workingDirectory: prefer account's per-bot dir, then
+    // global config, then leave alone.
+    const desiredCwd = account.workingDirectory ?? config.workingDirectory;
+    if (desiredCwd && session.workingDirectory === process.cwd()) {
+      session.workingDirectory = desiredCwd;
+      sessionStore.save(account.accountId, session);
+    }
+
+    if (session.state !== 'idle') {
+      logger.warn('Resetting stale session state on startup', {
+        accountId: account.accountId,
+        state: session.state,
+      });
+      session.state = 'idle';
+      sessionStore.save(account.accountId, session);
+    }
+
+    const effectivePermissionMode = session.permissionMode ?? config.permissionMode;
+    const isAutoPermission = effectivePermissionMode === 'auto';
+    const sdkPermissionMode = isAutoPermission ? 'bypassPermissions' as const : effectivePermissionMode;
+    const cwd = (session.workingDirectory || account.workingDirectory || config.workingDirectory || process.cwd())
+      .replace(/^~/, process.env.HOME || '');
+
+    const claudeSession = new PersistentSession({
+      cwd,
+      model: session.model,
+      systemPrompt: config.systemPrompt,
+      permissionMode: sdkPermissionMode,
+      resume: session.sdkSessionId,
+    });
+    claudeSession.start();
+
+    const sharedCtx = { lastContextToken: '' };
+    const activeAbortControllers = new Map<string, AbortController>();
+    const permissionBroker = createPermissionBroker(async () => {
+      try {
+        await channel.sendText(account.userId ?? '', sharedCtx.lastContextToken, '⏰ Permission request timed out, auto-denied.');
+      } catch {
+        logger.warn('Failed to send permission timeout message', { accountId: account.accountId });
+      }
+    });
+
+    instances.push({
+      accountId: account.accountId,
+      userId: account.userId,
+      channel,
+      claudeSession,
+      session,
+      sharedCtx,
+      activeAbortControllers,
+      permissionBroker,
+    });
+
+    logger.info('Bot instance ready', { accountId: account.accountId, cwd, channel: channelName });
+  }
+
+  if (instances.length === 0) {
+    console.error('No bot instances could be started.');
+    process.exit(1);
+  }
 
   // -- Shutdown --
   function shutdown(): void {
     logger.info('Shutting down...');
-    claudeSession.close();
-    channel.stop();
+    for (const inst of instances) {
+      try { inst.claudeSession.close(); } catch {}
+      try { inst.channel.stop(); } catch {}
+    }
     process.exit(0);
   }
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  logger.info('Daemon started', { accountId: account.accountId, channel: channelName });
-  console.log(`Started (channel=${channelName}, account=${account.accountId})`);
+  logger.info('Daemon started', { channel: channelName, bots: instances.length });
+  console.log(`Started (channel=${channelName}, bots=${instances.length})`);
+  for (const inst of instances) console.log(`  - ${inst.accountId}`);
 
-  await channel.start(
-    async (msg: InboundMessage) => {
-      await handleMessage(msg, account.accountId, account.userId, session, sessionStore, permissionBroker, channel, config, sharedCtx, activeAbortControllers, claudeSession);
-    },
-    () => {
-      logger.warn('Channel session expired');
-      console.error('⚠️ Channel session expired. Please re-run setup.');
-    },
-  );
+  // Run all bots concurrently. Channel.start() polls forever; Promise.all
+  // keeps the process alive until any channel stops.
+  await Promise.all(instances.map((inst) =>
+    inst.channel.start(
+      async (msg: InboundMessage) => {
+        await handleMessage(msg, inst, sessionStore, config);
+      },
+      () => {
+        logger.warn('Channel session expired', { accountId: inst.accountId });
+        console.error(`⚠️ Channel session expired for ${inst.accountId}.`);
+      },
+    ),
+  ));
 }
 
 // ---------------------------------------------------------------------------
@@ -175,17 +250,11 @@ async function runDaemon(): Promise<void> {
 
 async function handleMessage(
   msg: InboundMessage,
-  accountId: string,
-  _userId: string | undefined,
-  session: Session,
+  inst: BotInstance,
   sessionStore: ReturnType<typeof createSessionStore>,
-  permissionBroker: ReturnType<typeof createPermissionBroker>,
-  channel: Channel,
   config: ReturnType<typeof loadConfig>,
-  sharedCtx: { lastContextToken: string },
-  activeControllers: Map<string, AbortController>,
-  claudeSession: PersistentSession,
 ): Promise<void> {
+  const { accountId, channel, session, permissionBroker, sharedCtx, activeAbortControllers: activeControllers, claudeSession } = inst;
   const contextToken = msg.contextToken;
   const fromUserId = msg.from;
   sharedCtx.lastContextToken = contextToken;
@@ -277,11 +346,7 @@ async function handleMessage(
     }
 
     if (result.handled && result.claudePrompt) {
-      await sendToClaude(
-        result.claudePrompt, images, fromUserId, contextToken,
-        accountId, session, sessionStore, permissionBroker,
-        channel, config, activeControllers, claudeSession,
-      );
+      await sendToClaude(result.claudePrompt, images, fromUserId, contextToken, inst, sessionStore, config);
       return;
     }
 
@@ -294,11 +359,7 @@ async function handleMessage(
     return;
   }
 
-  await sendToClaude(
-    userText, images, fromUserId, contextToken,
-    accountId, session, sessionStore, permissionBroker,
-    channel, config, activeControllers, claudeSession,
-  );
+  await sendToClaude(userText, images, fromUserId, contextToken, inst, sessionStore, config);
 }
 
 async function sendToClaude(
@@ -306,22 +367,18 @@ async function sendToClaude(
   images: InboundMessage['images'],
   fromUserId: string,
   contextToken: string,
-  accountId: string,
-  session: Session,
+  inst: BotInstance,
   sessionStore: ReturnType<typeof createSessionStore>,
-  permissionBroker: ReturnType<typeof createPermissionBroker>,
-  channel: Channel,
   config: ReturnType<typeof loadConfig>,
-  activeControllers: Map<string, AbortController>,
-  claudeSession: PersistentSession,
 ): Promise<void> {
+  const { accountId, channel, session, permissionBroker, activeAbortControllers: activeControllers, claudeSession } = inst;
   session.state = 'processing';
   sessionStore.save(accountId, session);
 
   const abortController = new AbortController();
   activeControllers.set(accountId, abortController);
 
-  sessionStore.addChatMessage(session, 'user', userText || '(图片)');
+  sessionStore.addChatMessage(session, 'user', userText || '(image)');
 
   try {
     // Convert channel-agnostic ImageData[] to Claude SDK format
@@ -358,7 +415,7 @@ async function sendToClaude(
     }
 
     const result = await claudeSession.send({
-      text: userText || '请分析这张图片',
+      text: userText || 'Please analyze this image.',
       images: sdkImages,
       abortSignal: abortController.signal,
       onText: async (delta: string) => {

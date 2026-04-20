@@ -11,6 +11,7 @@ import { logger } from '@claude-bridge/core';
 
 import {
   saveTelegramAccount,
+  loadTelegramAccount,
   loadLatestTelegramAccount,
   type TelegramAccountData,
 } from './accounts.js';
@@ -32,6 +33,16 @@ export class TelegramChannel implements Channel {
   private account: TelegramAccountData | null = null;
   private accountId: string | null = null;
   private bot: Bot | null = null;
+  private readonly preferredAccountId: string | null;
+
+  /**
+   * @param accountId - If provided, this instance is bound to that specific
+   *   Telegram account (used for multi-bot mode). If omitted, setup creates
+   *   a new account and loadAccount picks the most recently added one.
+   */
+  constructor(accountId?: string) {
+    this.preferredAccountId = accountId ?? null;
+  }
 
   async setup(): Promise<void> {
     console.log('\nTelegram Bot Setup');
@@ -66,26 +77,49 @@ export class TelegramChannel implements Channel {
       throw new Error(`Invalid user ID: ${ownerStr}`);
     }
 
+    const workingDirectory = await promptUser(
+      'Working directory for this bot',
+      process.cwd(),
+    );
+
     const data: TelegramAccountData = {
       botToken: token,
       botId: me.id,
       botUsername: me.username ?? '',
       ownerUserId,
+      workingDirectory,
       createdAt: new Date().toISOString(),
     };
 
     const id = saveTelegramAccount(data);
     this.account = data;
     this.accountId = id;
-    console.log(`✅ Telegram bot bound (accountId=${id})`);
+    console.log(`✅ Telegram bot bound (accountId=${id}, cwd=${workingDirectory})`);
+    console.log('\nTip: run `npm run setup -- telegram` again to add another bot.');
   }
 
   loadAccount(): AccountInfo | null {
-    const loaded = loadLatestTelegramAccount();
-    if (!loaded) return null;
-    this.account = loaded.data;
-    this.accountId = loaded.id;
-    return { accountId: loaded.id, userId: String(loaded.data.ownerUserId) };
+    let id: string;
+    let data: TelegramAccountData | null;
+
+    if (this.preferredAccountId) {
+      id = this.preferredAccountId;
+      data = loadTelegramAccount(id);
+    } else {
+      const loaded = loadLatestTelegramAccount();
+      if (!loaded) return null;
+      id = loaded.id;
+      data = loaded.data;
+    }
+
+    if (!data) return null;
+    this.account = data;
+    this.accountId = id;
+    return {
+      accountId: id,
+      userId: String(data.ownerUserId),
+      workingDirectory: data.workingDirectory,
+    };
   }
 
   async start(

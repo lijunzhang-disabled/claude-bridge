@@ -33,6 +33,11 @@ export interface AccountInfo {
   accountId: string;
   /** User ID of the bot owner, if applicable (for self-messaging) */
   userId?: string;
+  /**
+   * Working directory this account operates in. If undefined, the daemon
+   * falls back to the global workingDirectory from config.env.
+   */
+  workingDirectory?: string;
 }
 
 export interface Channel {
