@@ -29,7 +29,15 @@ they compose freely.
 
 ## Adding a bot
 
-### 1. Create the bot on Telegram
+Two ways to register a new bot. Both end up writing the same account
+file — pick whichever fits your situation.
+
+### Option A: From chat (hot-add, no restart) — recommended
+
+Use this once you have at least one working bot. No terminal access
+required.
+
+#### 1. Create the bot on Telegram
 
 Open [@BotFather](https://t.me/BotFather):
 
@@ -41,15 +49,58 @@ Follow the prompts — give it a name and a username ending in `_bot`.
 BotFather replies with an **HTTP API token** (looks like
 `1234567890:ABCdefGHI...`). Copy it.
 
-### 2. Start a chat with the new bot
+#### 2. Start a chat with the new bot
 
 On Telegram, search for the new bot by its `@username`, open the chat,
 tap **Start**. This gives the bot permission to message you.
 
-### 3. Run setup
+#### 3. Register it via an existing bot
+
+Open your existing bot (`@bot1`) and send:
+
+```
+/spawn 1234567890:ABC...token...XYZ /path/to/new/project
+```
+
+`@bot1` validates the token, spins up the new bot, and replies:
+
+```
+✅ Registered @newbot (telegram-<id>) in /path/to/new/project.
+You can start chatting with it on Telegram now.
+⚠️ Remember to delete your /spawn message so the token is not
+   left in chat history.
+```
+
+#### 4. Delete your `/spawn` message
+
+The bot token is sensitive and Telegram keeps message history —
+delete the `/spawn` line from the chat immediately after registration.
+
+#### 5. Message the new bot
+
+It's already polling. The owner is auto-set to your Telegram user ID
+(the same user who ran `/spawn`).
+
+---
+
+### Option B: From the terminal (first bot, or when daemon isn't running)
+
+Use this when you're setting up your **very first** bot (there's no
+existing bot to `/spawn` from), or when you prefer a CLI flow.
+
+#### 1. Create the bot on Telegram
+
+Same as Option A step 1 — `/newbot` in [@BotFather](https://t.me/BotFather),
+copy the token.
+
+#### 2. Start a chat with the new bot
+
+Same as Option A step 2 — tap **Start** in the new bot's chat.
+
+#### 3. Run setup
 
 ```bash
-cd ~/.claude/skills/wechat-claude-code
+cd /path/to/claude-bridge   # wherever you cloned the repo
 npm run setup -- telegram
 ```
 
@@ -60,10 +111,10 @@ Setup prompts for three things:
 - **Working directory** — the project path this bot operates on
 
 Setup validates the token via `getMe`, creates
-`~/.wechat-claude-code/accounts/telegram-<botId>.json`, and leaves
+`~/.claude-bridge/accounts/telegram-<botId>.json`, and leaves
 other bots untouched.
 
-### 4. Restart the daemon
+#### 4. Restart the daemon
 
 ```bash
 npm run daemon -- restart
@@ -80,40 +131,12 @@ Started (channel=telegram, bots=2)
 Send a message to `@newbot` and Claude will respond using the new
 working directory. Other bots keep using theirs.
 
-### Hot-add from chat (no restart)
-
-If the daemon is already running and you have at least one working bot,
-you can add a new bot without touching the terminal:
-
-1. Create the new bot via @BotFather — same as above.
-2. Open your existing bot (`@bot1`) and send:
-
-   ```
-   /spawn 1234567890:ABC...token...XYZ /path/to/new/project
-   ```
-
-3. `@bot1` validates the token, spins up the new bot, and replies:
-
-   ```
-   ✅ Registered @newbot (telegram-<id>) in /path/to/new/project.
-   You can start chatting with it on Telegram now.
-   ⚠️ Remember to delete your /spawn message so the token is not
-      left in chat history.
-   ```
-
-4. **Delete your `/spawn` message from the Telegram chat** — the token
-   is sensitive and Telegram keeps message history.
-5. Message the new bot — it's already polling.
-
-The owner of the new bot is auto-set to your Telegram user ID (the same
-user who ran `/spawn`).
-
 ---
 
 ## Listing configured bots
 
 ```bash
-ls ~/.wechat-claude-code/accounts/ | grep '^telegram-'
+ls ~/.claude-bridge/accounts/ | grep '^telegram-'
 ```
 
 Each `telegram-<botId>.json` is a plain JSON file showing the bot's
@@ -158,7 +181,7 @@ npm run daemon -- restart
 
 ```bash
 # Edit the file
-nano ~/.wechat-claude-code/accounts/telegram-<botId>.json
+nano ~/.claude-bridge/accounts/telegram-<botId>.json
 # Change "workingDirectory": "/old/path" to the new path
 # Save, then:
 npm run daemon -- restart
@@ -185,8 +208,8 @@ The daemon will:
 
 - stop that bot's Telegram polling
 - close its Claude Code subprocess
-- delete `~/.wechat-claude-code/accounts/telegram-<botId>.json`
-- delete `~/.wechat-claude-code/sessions/telegram-<botId>.json`
+- delete `~/.claude-bridge/accounts/telegram-<botId>.json`
+- delete `~/.claude-bridge/sessions/telegram-<botId>.json`
 - confirm back to you
 
 This only cleans up the daemon's side. If you want to fully retire the
@@ -209,13 +232,13 @@ Do this first so the token can't be misused.
 ### 2. Delete the daemon's account record
 
 ```bash
-rm ~/.wechat-claude-code/accounts/telegram-<botId>.json
+rm ~/.claude-bridge/accounts/telegram-<botId>.json
 ```
 
 ### 3. Delete the daemon's session data
 
 ```bash
-rm ~/.wechat-claude-code/sessions/telegram-<botId>.json
+rm ~/.claude-bridge/sessions/telegram-<botId>.json
 ```
 
 This clears the bot's chat history, model override, permission mode,
@@ -255,7 +278,7 @@ The removed bot is no longer listed or polled.
 
 - **Don't share tokens.** Each bot token is a secret. The daemon
   stores them with `0600` permissions in
-  `~/.wechat-claude-code/accounts/`.
+  `~/.claude-bridge/accounts/`.
 
 - **Memory usage.** Each bot spawns one `claude` subprocess (~200 MB
   RAM). Three to five bots is comfortable on a laptop; dozens will

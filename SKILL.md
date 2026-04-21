@@ -1,123 +1,123 @@
 ---
-name: wechat-claude-code
-description: 微信消息桥接 - 在微信中与 Claude Code 聊天。支持文字对话、图片识别、权限审批、斜杠命令。
+name: claude-bridge
+description: Bridge chat platforms (Telegram, WeChat, ...) to local Claude Code. Supports multi-bot, permission approval, images, slash commands.
 ---
 
-# WeChat Claude Code Bridge
+# claude-bridge
 
-通过个人微信与本地 Claude Code 进行对话。
+Run a daemon that connects chat apps (Telegram by default, WeChat also supported) to your local Claude Code. Multi-bot, hot-add from chat, permission approval, images, slash commands.
 
-## 前置条件
+## Prerequisites
 
 - Node.js >= 18
-- macOS（daemon 使用 launchd 管理）
-- 个人微信账号（需扫码绑定）
-- 已安装 Claude Code（`@anthropic-ai/claude-agent-sdk`）
+- macOS or Linux
+- Claude Code (`@anthropic-ai/claude-agent-sdk`)
+- Telegram bot token from @BotFather (for Telegram), or a personal WeChat account with the ClawBot plugin enabled (for WeChat)
 
-## 安装
+## Trigger scenarios
 
-```bash
-cd ~/.claude/skills/wechat-claude-code
-npm install
-```
+Triggered when the user mentions "Telegram bot", "WeChat bridge", "claude bridge", "connect my bot", "set up telegram claude", "chat bot for claude code", etc.
 
-`postinstall` 脚本会自动执行 `npm run build` 编译 TypeScript。
+## Behavior when triggered
 
-## 触发场景
+**When triggered, do not take any actions immediately.** First probe the current state, then present the user with actionable options.
 
-用户提到"微信桥接"、"微信聊天"、"wechat bridge"、"连接微信"、"微信状态"、"停止微信"等与微信桥接相关的话题时触发。
+Assume the project lives at the directory that contains this `SKILL.md` file (so relative commands work). Shell commands below assume that working directory.
 
-## 触发后的执行流程
-
-**被触发时，不要直接执行任何操作，先探查当前状态再给出可用操作。**
-
-按顺序检查以下状态：
-
-### 第 1 步：检查是否已安装
+### Step 1: Check if dependencies are installed
 
 ```bash
-cd ~/.claude/skills/wechat-claude-code && test -d node_modules && echo "installed" || echo "not_installed"
+test -d node_modules && echo "installed" || echo "not_installed"
 ```
 
-- 如果 `not_installed`：提示用户运行 `cd ~/.claude/skills/wechat-claude-code && npm install` 安装依赖，然后停止。
+- If `not_installed`: tell the user to run `npm install` (from the project directory). Stop.
 
-### 第 2 步：检查是否已绑定微信账号
+### Step 2: Check which channels are configured
 
 ```bash
-ls ~/.wechat-claude-code/accounts/*.json 2>/dev/null | head -1
+ls ~/.claude-bridge/accounts/*.json 2>/dev/null | head -3
 ```
 
-- 如果没有账号文件：提示用户需要先执行 setup 扫码绑定，询问是否现在执行。
-- 如果有账号文件：继续下一步。
+- If no account files: tell the user no channel is set up yet. Ask which channel they want (Telegram recommended) and run `npm run setup -- telegram` or `npm run setup -- wechat`.
+- If account files exist: continue.
 
-### 第 3 步：检查 daemon 运行状态
+### Step 3: Check daemon status
 
 ```bash
-cd ~/.claude/skills/wechat-claude-code && npm run daemon -- status
+npm run daemon -- status
 ```
 
-### 第 4 步：根据状态展示信息
+### Step 4: Show status summary
 
-**如果 daemon 未运行：**
-
-```
-微信桥接已绑定但未运行。
-
-可用操作：
-  setup    重新扫码绑定（换号或过期时使用）
-  start    启动服务
-  logs     查看上次运行的日志
-```
-
-**如果 daemon 正在运行：**
+**If the daemon is not running:**
 
 ```
-微信桥接正在运行（PID: xxx）。
+claude-bridge is configured but not running.
 
-可用操作：
-  stop     停止服务
-  restart  重启服务（代码更新后使用）
-  logs     查看运行日志
-
-微信端命令（直接在微信中发送）：
-  /help    显示帮助
-  /clear   清除当前会话，开始新对话
-  /status  查看当前会话状态
-  /model   切换 Claude 模型
-  /skills  查看已安装的 skill
+Options:
+  setup    Add a new bot (run npm run setup -- <channel>)
+  start    Start the daemon (npm run daemon -- start)
+  logs     View recent logs (npm run daemon -- logs)
 ```
 
-如果用户明确指定了操作（如"启动微信"、"停止微信服务"、"看看日志"等），跳过状态展示直接执行对应命令。
-
-## 子命令参考
-
-所有命令的工作目录为 `~/.claude/skills/wechat-claude-code`。
-
-| 命令 | 执行 | 说明 |
-|------|------|------|
-| setup | `npm run setup` | 首次安装向导：生成 QR 码 → 微信扫码 → 配置工作目录 |
-| start | `npm run daemon -- start` | 启动 launchd 守护进程（开机自启、自动重启） |
-| stop | `npm run daemon -- stop` | 停止守护进程 |
-| restart | `npm run daemon -- restart` | 重启守护进程 |
-| status | `npm run daemon -- status` | 查看运行状态 |
-| logs | `npm run daemon -- logs` | 查看最近日志（tail -100） |
-
-## 权限审批
-
-当 Claude 请求执行工具时，微信会收到权限请求消息：
-- 回复 `y` 或 `yes` 允许
-- 回复 `n` 或 `no` 拒绝
-- 60 秒未回复自动拒绝并通知
-
-## 数据目录
-
-所有数据存储在 `~/.wechat-claude-code/`：
+**If the daemon is running:**
 
 ```
-~/.wechat-claude-code/
-├── accounts/       # 绑定的微信账号数据（每个账号一个 JSON）
-├── config.env      # 全局配置（工作目录、模型、权限模式）
-├── sessions/       # 会话数据（每个账号一个 JSON）
-├── get_updates_buf # 消息轮询同步缓冲
-└── logs/           # 运行日志（每日轮转，保留 30 天）
+claude-bridge is running (PID: xxx, N bots).
+
+Options:
+  stop     Stop the daemon
+  restart  Restart after code changes
+  logs     Tail recent logs
+
+Chat commands (send in Telegram/WeChat):
+  /help                 List all commands
+  /bots                 List running bots (Telegram)
+  /spawn <token> <cwd>  Add a new Telegram bot without restart
+  /rmbot <accountId>    Remove a bot
+  /clear                Start a fresh conversation
+  /status               Show session state
 ```
+
+If the user explicitly requests an action (e.g. "start the bot", "stop it", "show logs"), skip the status preview and run the corresponding command directly.
+
+## Subcommand reference
+
+All commands run from the project directory.
+
+| Command | Executes | Description |
+|---------|----------|-------------|
+| setup | `npm run setup -- <channel>` | Interactive setup for telegram or wechat |
+| start | `npm run daemon -- start` | Start the daemon (launchd/systemd) |
+| stop | `npm run daemon -- stop` | Stop the daemon |
+| restart | `npm run daemon -- restart` | Restart |
+| status | `npm run daemon -- status` | Show status |
+| logs | `npm run daemon -- logs` | Tail recent logs |
+
+## Data directory
+
+All data is stored in `~/.claude-bridge/`:
+
+```
+~/.claude-bridge/
+├── accounts/       # one JSON per configured bot
+├── config.env      # global config (channel, working dir, model, permission mode)
+├── sessions/       # per-account session state
+├── logs/           # daily log files (30-day retention)
+└── get_updates_buf # WeChat polling sync buffer (if using WeChat)
+```
+
+Override the location with `CLAUDE_BRIDGE_DATA_DIR`.
+
+## Multi-bot
+
+One daemon can run many Telegram bots simultaneously, each with its own working directory. See `docs/multi-bot.md` in the project directory.
+
+## Permission approval
+
+When Claude requests a tool, the user receives a permission prompt in chat:
+
+- `y` / `yes` — allow once
+- `n` / `no` — deny
+- `a` / `always` — allow and auto-approve future calls to that tool (per-session)
+- 10-minute timeout auto-denies

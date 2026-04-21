@@ -2,34 +2,38 @@
 
 [English](README.md) | **中文**
 
-将聊天平台桥接到本地 [Claude Code](https://claude.ai/claude-code)。在手机上通过微信、Telegram、Discord 等与 Claude 对话——文字、图片、权限审批、斜杠命令全部支持。当前已支持微信，Telegram/Discord 通过实现 Channel 接口即可加入。
+将聊天平台桥接到本地 [Claude Code](https://claude.ai/claude-code)。在手机上通过 **Telegram** 或微信与 Claude 对话——文字、图片、权限审批、斜杠命令全部支持。
 
-> **致谢。** 本项目源自 [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code) 的 fork，之后进行了较大改动：重构为 monorepo + channel 适配器架构；迁移到 persistent session 模型（一个长期运行的 Claude 进程替代每条消息新起进程）；修复了多个生产问题（iLink 协议头、IDC 重定向、WAF 清洗、会话恢复、"始终允许"权限等）。完整改动见 `git log`。
+📖 **运行多个机器人？** 请看 **[docs/multi-bot.md](docs/multi-bot.md)** —— 添加、列出、修改、删除机器人（含聊天中 `/spawn` 热添加）。
+
+> **致谢。** 本项目源自 [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code) 的 fork，之后进行了较大改动：重构为 monorepo + channel 适配器架构；迁移到 persistent session 模型；修复了多个生产问题（协议头、IDC 重定向、WAF 清洗、会话恢复、"始终允许"权限等）；扩展支持 Telegram 及多机器人 + 聊天热添加。完整改动见 `git log`。
 
 ## 功能特性
 
-- **Channel 适配器架构** — 当前支持微信，添加 Telegram/Discord 只需实现 `Channel` 接口
-- **持久化 Claude 会话** — 一个长期运行的 Claude Code 进程在内存中保留上下文，不再每条消息都起新进程
-- **实时进度推送** — 实时查看 Claude 的工具调用（🔧 Bash、📖 Read、🔍 Glob…）
-- **思考预览** — 每次工具调用前展示 💭 Claude 的推理摘要
-- **中断支持** — 在 Claude 处理中发送新消息可打断当前任务
-- **权限审批** — 聊天中回复 `y`（允许）、`n`（拒绝）、`a`（始终允许此工具）
-- **图片识别** — 发送照片让 Claude 分析
-- **斜杠命令** — `/help`、`/clear`、`/model`、`/prompt`、`/status`、`/skills` 等
-- **跨平台** — macOS（launchd）、Linux（systemd + nohup 回退）
+- **Channel 适配器架构** —— 当前支持 Telegram + 微信，添加 Discord/Slack/... 只需实现 `Channel` 接口
+- **多机器人（Telegram）** —— 一个 daemon 同时运行多个机器人，各自独立的工作目录与 Claude 会话
+- **聊天热添加** —— 在已有机器人中发送 `/spawn <token> <cwd>` 即可注册新机器人，无需重启
+- **持久化 Claude 会话** —— 每个机器人一个长期运行的 Claude Code 进程，上下文在内存中保留
+- **实时进度推送** —— 实时查看 Claude 的工具调用（🔧 Bash、📖 Read、🔍 Glob…）
+- **思考预览** —— 每次工具调用前展示 💭 Claude 的推理摘要
+- **中断支持** —— 在 Claude 处理中发送新消息可打断当前任务
+- **权限审批** —— 聊天中回复 `y`（允许）、`n`（拒绝）、`a`（始终允许此工具）
+- **图片识别** —— 发送照片让 Claude 分析
+- **斜杠命令** —— `/help`、`/clear`、`/model`、`/prompt`、`/status`、`/skills`、`/bots`、`/spawn`、`/rmbot` 等
+- **跨平台** —— macOS（launchd）、Linux（systemd + nohup 回退）
 
-## 仓库结构
+## 安装位置
 
+本项目**可以放在任何位置** —— 它作为后台 daemon 运行，不是 Claude Code Skill。任意路径均可：
+
+```bash
+git clone https://github.com/lijunzhang-disabled/claude-bridge.git ~/projects/claude-bridge
+# 或
+git clone https://github.com/lijunzhang-disabled/claude-bridge.git /opt/claude-bridge
+# 或任意路径
 ```
-claude-bridge/
-├── packages/
-│   ├── core/              # 与 channel 无关：PersistentSession、权限 broker、命令
-│   ├── channel-wechat/    # 微信适配器（iLink bot API）
-│   └── daemon/            # 编排层 —— 选择 channel，运行消息循环
-├── scripts/
-│   └── daemon.sh          # 跨平台服务管理脚本
-└── packages/<pkg>/src/    # 每个 package 的 TypeScript 源码
-```
+
+只有当你希望 Claude Code 将此项目作为 skill 自动发现（通过 `SKILL.md`）时，才需要放在 `~/.claude/skills/claude-bridge/`。日常使用机器人不需要这样做。
 
 ## 前置条件
 
@@ -38,33 +42,38 @@ claude-bridge/
 - 已安装 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)（含 `@anthropic-ai/claude-agent-sdk`）
   > **注意：** 该 SDK 支持第三方 API 提供商（OpenRouter、AWS Bedrock、自定义 OpenAI 兼容接口）——按需设置 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_API_KEY` 即可。
 
-### Channel 特定前置条件
+### 各 channel 的前置条件
 
+- **Telegram**（推荐）：来自 [@BotFather](https://t.me/BotFather) 的机器人 token。创建机器人免费且耗时不到一分钟。
 - **微信**：个人微信账号。请先将微信更新到最新版本，并在 设置 → 插件 中启用 ClawBot（龙虾）插件。
 
 ## 安装
 
 ```bash
-git clone https://github.com/lijunzhang-disabled/claude-bridge.git ~/.claude/skills/claude-bridge
-cd ~/.claude/skills/claude-bridge
+git clone https://github.com/lijunzhang-disabled/claude-bridge.git
+cd claude-bridge
 npm install
 ```
 
-`postinstall` 脚本会自动通过 `tsc -b` 编译所有 package。
+`postinstall` 会自动通过 `tsc -b` 编译所有 package。
 
-## 快速开始
+## 快速开始 —— Telegram
 
-### 1. 首次设置
+### 1. 创建机器人
+
+打开 [@BotFather](https://t.me/BotFather)，发送 `/newbot`，按提示操作。复制 BotFather 给你的 HTTP API token。
+
+通过 [@userinfobot](https://t.me/userinfobot) 查找自己的 Telegram 数字用户 ID —— 机器人只会接受来自这个用户的消息。
+
+### 2. 设置
 
 ```bash
-npm run setup           # 默认使用 wechat
-# 或显式指定：
-npm run setup -- wechat
+npm run setup -- telegram
 ```
 
-微信：会自动弹出二维码图片，用微信扫码后配置工作目录。
+粘贴 token、你的用户 ID、以及该机器人使用的工作目录。setup 通过 `getMe` 验证 token 并保存凭证。
 
-### 2. 启动服务
+### 3. 启动 daemon
 
 ```bash
 npm run daemon -- start
@@ -73,27 +82,42 @@ npm run daemon -- start
 - **macOS**：注册 launchd agent，开机自启 + 崩溃自动重启
 - **Linux**：使用 systemd user service（不可用时回退到 nohup）
 
-### 3. 聊天
+### 4. 聊天
 
-在对应的聊天应用中发送任何消息即可开始与 Claude Code 对话。
+在 Telegram 中向你的机器人发送任何消息，Claude 就会回复。
 
-### 4. 服务管理
+### 稍后添加更多机器人
 
-```bash
-npm run daemon -- status
-npm run daemon -- stop
-npm run daemon -- restart
-npm run daemon -- logs
+两种方式任选其一：再次运行 `npm run setup -- telegram`（然后 `npm run daemon -- restart`），**或**在已有机器人中发送：
+
+```
+/spawn <新 token> /path/to/new/project
 ```
 
-## 运行多个 Telegram 机器人
+新机器人立即可用 —— 无需重启 daemon。详见 [docs/multi-bot.md](docs/multi-bot.md)。
 
-一个 daemon 可以同时运行多个 Telegram 机器人 —— 每个都有独立的工作目录、
-独立的 Claude Code 子进程、独立的会话历史。每个机器人运行一次
-`npm run setup -- telegram` 即可。
+## 快速开始 —— 微信（替代方案）
 
-添加/列出/修改/删除机器人的详细说明见
-**[docs/multi-bot.md](docs/multi-bot.md)**（英文）。
+```bash
+npm run setup -- wechat
+```
+
+会自动弹出二维码图片 —— 用微信扫码（需启用 ClawBot 插件），然后配置工作目录。接着：
+
+```bash
+npm run daemon -- start
+```
+
+微信当前限制为每个 daemon 一个账号。
+
+## 服务管理
+
+```bash
+npm run daemon -- status     # 查看状态
+npm run daemon -- stop       # 停止
+npm run daemon -- restart    # 重启（代码更新后）
+npm run daemon -- logs       # 查看日志
+```
 
 ## 聊天命令
 
@@ -106,20 +130,23 @@ npm run daemon -- logs
 | `/permission <模式>` | 切换权限模式 |
 | `/prompt [文本]` | 查看或设置附加到每次查询的系统提示词 |
 | `/status` | 查看会话状态 |
-| `/cwd [路径]` | 查看或切换工作目录 |
+| `/cwd [路径]` | 查看或切换工作目录（仅当前会话） |
 | `/skills` | 列出已安装的 Claude Code skills |
 | `/history [n]` | 查看最近 N 条对话 |
 | `/compact` | 开启新 SDK 会话 |
 | `/undo [n]` | 删除最近 N 条历史 |
+| `/bots` | **Telegram** —— 列出所有运行中的机器人 |
+| `/spawn <token> <cwd>` | **Telegram** —— 热添加新机器人 |
+| `/rmbot <accountId>` | **Telegram** —— 停止并删除机器人 |
 | `/<skill> [参数]` | 触发已安装的 skill |
 
 ## 权限审批
 
 Claude 请求执行工具时，你会收到权限请求：
 
-- `y` 或 `yes` — 本次允许
-- `n` 或 `no` — 拒绝
-- `a` 或 `always` — 允许并自动批准后续所有对此工具的调用（本次会话）
+- `y` 或 `yes` —— 本次允许
+- `n` 或 `no` —— 拒绝
+- `a` 或 `always` —— 允许并自动批准后续所有对此工具的调用（本次会话）
 - 10 分钟内未回复视为拒绝
 
 通过 `/permission <模式>` 切换模式：
@@ -135,45 +162,52 @@ Claude 请求执行工具时，你会收到权限请求：
 
 ```
 聊天平台  ←→  Channel 适配器  ←→  Daemon  ←→  PersistentSession  ←→  Claude Code
-(微信 /            (实现 Channel         (消息编排、         (单一长期运行的
- Telegram /         接口)                 权限)              claude 进程，
- Discord)                                                     上下文在内存)
+(Telegram /        (实现 Channel         (编排、权限、         (每个机器人一个
+ 微信 /             接口)                 多机器人运行时)      长期运行的 claude
+ Discord)                                                      进程，上下文在内存)
 ```
 
-- Daemon 按照配置从对应 channel 拉取入站消息
-- 消息通过 streaming input 转发给单一的长期运行 Claude Code 进程
+- Daemon 从配置的 channel 拉取入站消息
+- 消息路由到对应机器人的长期运行 Claude Code 进程
 - Claude 工作过程中，工具调用和思考预览实时回传
-- 响应通过同一个 channel 适配器返回
+- 每个机器人有独立的工作目录和会话状态
 
 ### 添加新 channel
 
-实现 `@claude-bridge/core` 中的 `Channel` 接口：
+实现 `@claude-bridge/core` 中的 `Channel` 接口。参考实现：
+`packages/channel-telegram/src/telegram-channel.ts`、
+`packages/channel-wechat/src/wechat-channel.ts`。
 
-```typescript
-export interface Channel {
-  readonly name: string;
-  setup(): Promise<void>;
-  loadAccount(): AccountInfo | null;
-  start(onMessage, onSessionExpired?): Promise<void>;
-  stop(): void;
-  sendText(to: string, contextToken: string, text: string): Promise<void>;
-}
+## 仓库结构
+
 ```
-
-参考实现：`packages/channel-wechat/src/wechat-channel.ts`。
+claude-bridge/
+├── packages/
+│   ├── core/                 # PersistentSession、权限 broker、Channel 接口
+│   ├── channel-wechat/       # 微信适配器（iLink bot API）
+│   ├── channel-telegram/     # Telegram 适配器（grammy）
+│   └── daemon/               # 编排层 —— DaemonRuntime、消息循环
+├── docs/
+│   └── multi-bot.md          # 多机器人使用指南
+├── scripts/
+│   └── daemon.sh             # 跨平台服务管理脚本
+└── packages/<pkg>/src/       # 每个 package 的 TypeScript 源码
+```
 
 ## 数据存储
 
-所有数据存放在 `~/.wechat-claude-code/`（为与上游项目兼容沿用该目录）：
+所有数据存放在 `~/.claude-bridge/`：
 
 ```
-~/.wechat-claude-code/
-├── accounts/       # channel 账号凭证
+~/.claude-bridge/
+├── accounts/       # channel 账号凭证（每个机器人一份 JSON）
 ├── config.env      # 全局配置（channel、工作目录、模型、权限模式、系统提示词）
 ├── sessions/       # 每账号会话数据
-├── get_updates_buf # 微信消息轮询同步 buffer
+├── get_updates_buf # 微信消息轮询同步 buffer（使用微信时）
 └── logs/           # 滚动日志（每日一份，保留 30 天）
 ```
+
+可通过 `CLAUDE_BRIDGE_DATA_DIR` 环境变量覆盖存储位置。
 
 ## 开发
 

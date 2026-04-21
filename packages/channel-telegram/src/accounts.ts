@@ -1,8 +1,7 @@
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { readdirSync, statSync, unlinkSync } from 'node:fs';
 import { Bot } from 'grammy';
-import { loadJson, saveJson, logger } from '@claude-bridge/core';
+import { loadJson, saveJson, logger, DATA_DIR } from '@claude-bridge/core';
 
 export interface TelegramAccountData {
   /** Bot token from @BotFather */
@@ -18,7 +17,7 @@ export interface TelegramAccountData {
   createdAt: string;
 }
 
-const ACCOUNTS_DIR = join(homedir(), '.wechat-claude-code', 'accounts');
+const ACCOUNTS_DIR = join(DATA_DIR, 'accounts');
 
 /** Accept only safe filename characters. */
 function validateAccountId(accountId: string): void {

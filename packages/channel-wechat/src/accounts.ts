@@ -1,7 +1,6 @@
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { readdirSync, statSync } from 'node:fs';
-import { loadJson, saveJson, logger } from '@claude-bridge/core';
+import { loadJson, saveJson, logger, DATA_DIR } from '@claude-bridge/core';
 
 export const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
 export const CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
@@ -14,7 +13,7 @@ export interface AccountData {
   createdAt: string;
 }
 
-const ACCOUNTS_DIR = join(homedir(), '.wechat-claude-code', 'accounts');
+const ACCOUNTS_DIR = join(DATA_DIR, 'accounts');
 
 /** Reject accountIds containing path traversal or unexpected characters. */
 function validateAccountId(accountId: string): void {

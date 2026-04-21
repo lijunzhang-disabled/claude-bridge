@@ -209,9 +209,9 @@ export function handleVersion(): CommandResult {
     const __dirname = fileURLToPath(new URL('.', import.meta.url));
     const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf-8'));
     const version = pkg.version || 'unknown';
-    return { reply: `wechat-claude-code v${version}`, handled: true };
+    return { reply: `claude-bridge v${version}`, handled: true };
   } catch {
-    return { reply: 'wechat-claude-code (version unknown)', handled: true };
+    return { reply: 'claude-bridge (version unknown)', handled: true };
   }
 }
 

@@ -3,5 +3,4 @@ dist/
 *.tsbuildinfo
 *.log
 .env
-.wechat-claude-code/
 .claude-bridge/
