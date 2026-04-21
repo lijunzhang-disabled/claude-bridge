@@ -4,7 +4,7 @@
 
 Bridge chat platforms to your local [Claude Code](https://claude.ai/claude-code). Chat with Claude from your phone — text, images, permission approvals, slash commands — via **Telegram** today, with WeChat also supported.
 
-📖 **Running multiple bots?** See **[docs/multi-bot.md](docs/multi-bot.md)** — add, list, change, and remove bots (with hot-add from chat via `/spawn`).
+📖 **Running multiple bots?** See **[docs/multi-bot.md](docs/multi-bot.md)** — add, list, change, and remove bots (with hot-add from chat via `/spawn`). *Telegram only* — WeChat is limited to one account per daemon.
 
 > **Attribution.** This project started as a fork of [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code). It has since been restructured into a monorepo with a channel-adapter architecture, migrated to the persistent-session pattern (one long-running Claude process instead of one per message), hardened against production issues (protocol headers, IDC redirect, WAF sanitization, session recovery, "always allow" permissions), and extended to support Telegram with multi-bot and hot-add via chat. See `git log` for the full list of changes.
 
@@ -59,11 +59,22 @@ npm install
 
 ## Quick Start — Telegram
 
-### 1. Create a bot
+### 1. Create a bot on Telegram
 
-Open [@BotFather](https://t.me/BotFather), send `/newbot`, follow the prompts. Copy the HTTP API token BotFather gives you.
-
-Find your Telegram numeric user ID via [@userinfobot](https://t.me/userinfobot) — the bot will only accept messages from this user.
+1. Open Telegram and search for **@BotFather** (the account with the blue checkmark). Or tap this link: [t.me/BotFather](https://t.me/BotFather).
+2. Start the chat and send:
+   ```
+   /newbot
+   ```
+3. BotFather asks for a **display name** — e.g. `My Claude Bot`. This is what appears in chats.
+4. Then a **username** — must be unique across Telegram and must end in `bot` (e.g. `my_claude_bot`, `junzhang_claude_bot`). If it's taken, BotFather asks again.
+5. BotFather replies with your **HTTP API token**, which looks like:
+   ```
+   1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ...
+   ```
+   **Copy it and keep it secret** — anyone with this token can control the bot.
+6. Find your Telegram **numeric user ID** by messaging [@userinfobot](https://t.me/userinfobot) — it replies with your ID (a number like `123456789`). The bot only accepts messages from this user; everyone else is ignored.
+7. **Open your new bot's chat** (search for its `@username` in Telegram) and tap **Start**. This tells Telegram the bot has permission to message you.
 
 ### 2. Setup
 
@@ -71,7 +82,13 @@ Find your Telegram numeric user ID via [@userinfobot](https://t.me/userinfobot) 
 npm run setup -- telegram
 ```
 
-Paste the token, your user ID, and the working directory for this bot. Setup validates the token via `getMe` and persists the credentials.
+Setup prompts for three things:
+
+- **Bot token** — paste the one from BotFather in step 5
+- **Your Telegram numeric user ID** — from step 6
+- **Working directory** — the project path this bot will operate on (e.g. `/Users/you/projects/api`)
+
+Setup validates the token via Telegram's `getMe` API, then persists the credentials to `~/.claude-bridge/accounts/telegram-<botId>.json`.
 
 ### 3. Start the daemon
 

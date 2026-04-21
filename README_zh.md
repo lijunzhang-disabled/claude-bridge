@@ -4,7 +4,7 @@
 
 将聊天平台桥接到本地 [Claude Code](https://claude.ai/claude-code)。在手机上通过 **Telegram** 或微信与 Claude 对话——文字、图片、权限审批、斜杠命令全部支持。
 
-📖 **运行多个机器人？** 请看 **[docs/multi-bot.md](docs/multi-bot.md)** —— 添加、列出、修改、删除机器人（含聊天中 `/spawn` 热添加）。
+📖 **运行多个机器人？** 请看 **[docs/multi-bot.md](docs/multi-bot.md)** —— 添加、列出、修改、删除机器人（含聊天中 `/spawn` 热添加）。*仅支持 Telegram* —— 微信当前限制为每个 daemon 一个账号。
 
 > **致谢。** 本项目源自 [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code) 的 fork，之后进行了较大改动：重构为 monorepo + channel 适配器架构；迁移到 persistent session 模型；修复了多个生产问题（协议头、IDC 重定向、WAF 清洗、会话恢复、"始终允许"权限等）；扩展支持 Telegram 及多机器人 + 聊天热添加。完整改动见 `git log`。
 
@@ -59,11 +59,22 @@ npm install
 
 ## 快速开始 —— Telegram
 
-### 1. 创建机器人
+### 1. 在 Telegram 创建机器人
 
-打开 [@BotFather](https://t.me/BotFather)，发送 `/newbot`，按提示操作。复制 BotFather 给你的 HTTP API token。
-
-通过 [@userinfobot](https://t.me/userinfobot) 查找自己的 Telegram 数字用户 ID —— 机器人只会接受来自这个用户的消息。
+1. 打开 Telegram，搜索 **@BotFather**（带蓝色认证标的账号）。或点击 [t.me/BotFather](https://t.me/BotFather)。
+2. 开始聊天并发送：
+   ```
+   /newbot
+   ```
+3. BotFather 会问你机器人的**显示名称** —— 例如 `My Claude Bot`。这是聊天中显示的名字。
+4. 再问**用户名** —— 必须全局唯一，且必须以 `bot` 结尾（例如 `my_claude_bot`、`junzhang_claude_bot`）。如果已被占用 BotFather 会让你再试。
+5. BotFather 返回你的 **HTTP API token**，形如：
+   ```
+   1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ...
+   ```
+   **复制并保密** —— 任何拿到这个 token 的人都能控制你的机器人。
+6. 给 [@userinfobot](https://t.me/userinfobot) 发一条消息，它会返回你的 **Telegram 数字用户 ID**（类似 `123456789`）。机器人只接受来自这个用户的消息，其他人发的都会被忽略。
+7. **打开你的新机器人**（在 Telegram 中搜索它的 `@username`），点 **Start**。这样机器人就有权给你发消息了。
 
 ### 2. 设置
 
@@ -71,7 +82,13 @@ npm install
 npm run setup -- telegram
 ```
 
-粘贴 token、你的用户 ID、以及该机器人使用的工作目录。setup 通过 `getMe` 验证 token 并保存凭证。
+setup 会依次询问三项：
+
+- **Bot token** —— 第 5 步从 BotFather 复制的那个
+- **你的 Telegram 数字用户 ID** —— 第 6 步获得的
+- **工作目录** —— 该机器人对应的项目路径（例如 `/Users/you/projects/api`）
+
+setup 会通过 Telegram 的 `getMe` 接口验证 token，然后把凭证保存到 `~/.claude-bridge/accounts/telegram-<botId>.json`。
 
 ### 3. 启动 daemon
 
