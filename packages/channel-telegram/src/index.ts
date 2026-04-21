@@ -1,2 +1,9 @@
 export { TelegramChannel } from './telegram-channel.js';
-export { listTelegramAccountIds } from './accounts.js';
+export {
+  listTelegramAccountIds,
+  deleteTelegramAccount,
+  saveTelegramAccount,
+  loadTelegramAccount,
+  registerTelegramAccount,
+  type TelegramAccountData,
+} from './accounts.js';

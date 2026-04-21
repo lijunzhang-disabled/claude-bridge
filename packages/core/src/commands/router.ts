@@ -1,7 +1,35 @@
 import type { Session } from '../session.js';
 import { findSkill } from '../claude/skill-scanner.js';
 import { logger } from '../logger.js';
-import { handleHelp, handleClear, handleCwd, handleModel, handlePermission, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleUnknown } from './handlers.js';
+import { handleHelp, handleClear, handleCwd, handleModel, handlePermission, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleSpawn, handleRmbot, handleBots, handleUnknown } from './handlers.js';
+
+export interface SpawnBotResult {
+  accountId: string;
+  username: string;
+  workingDirectory: string;
+}
+
+/**
+ * Hooks into the running daemon runtime. Injected by the daemon when
+ * building CommandContext; undefined in contexts that don't support
+ * dynamic bot management (e.g. tests).
+ */
+export interface DaemonHooks {
+  /**
+   * Register and hot-load a new Telegram bot.
+   * @throws if the token is invalid, already registered, or the bot fails to start.
+   */
+  addTelegramBot(token: string, workingDirectory: string): Promise<SpawnBotResult>;
+
+  /**
+   * Stop a bot, delete its account + session data, and remove it from the daemon.
+   * Returns true if the bot existed, false if the accountId was unknown.
+   */
+  removeBot(accountId: string): Promise<boolean>;
+
+  /** List currently running bot instances (accountId + human-readable label). */
+  listBots(): Array<{ accountId: string; label: string }>;
+}
 
 export interface CommandContext {
   accountId: string;
@@ -10,6 +38,7 @@ export interface CommandContext {
   clearSession: () => Session;
   getChatHistoryText?: (limit?: number) => string;
   rejectPendingPermission?: () => boolean;
+  daemon?: DaemonHooks;
   text: string;
 }
 
@@ -71,6 +100,12 @@ export function routeCommand(ctx: CommandContext): CommandResult {
     case 'version':
     case 'v':
       return handleVersion();
+    case 'spawn':
+      return handleSpawn(ctx, args);
+    case 'rmbot':
+      return handleRmbot(ctx, args);
+    case 'bots':
+      return handleBots(ctx);
     default:
       return handleUnknown(cmd, args);
   }

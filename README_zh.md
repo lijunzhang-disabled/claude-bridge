@@ -86,6 +86,15 @@ npm run daemon -- restart
 npm run daemon -- logs
 ```
 
+## 运行多个 Telegram 机器人
+
+一个 daemon 可以同时运行多个 Telegram 机器人 —— 每个都有独立的工作目录、
+独立的 Claude Code 子进程、独立的会话历史。每个机器人运行一次
+`npm run setup -- telegram` 即可。
+
+添加/列出/修改/删除机器人的详细说明见
+**[docs/multi-bot.md](docs/multi-bot.md)**（英文）。
+
 ## 聊天命令
 
 | 命令 | 说明 |

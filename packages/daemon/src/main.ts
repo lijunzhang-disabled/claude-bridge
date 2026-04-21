@@ -17,10 +17,18 @@ import {
   type CommandResult,
   type Channel,
   type InboundMessage,
+  type DaemonHooks,
+  type SpawnBotResult,
 } from '@claude-bridge/core';
 
 import { WeChatChannel } from '@claude-bridge/channel-wechat';
-import { TelegramChannel, listTelegramAccountIds } from '@claude-bridge/channel-telegram';
+import {
+  TelegramChannel,
+  listTelegramAccountIds,
+  deleteTelegramAccount,
+  loadTelegramAccount,
+  registerTelegramAccount,
+} from '@claude-bridge/channel-telegram';
 
 // ---------------------------------------------------------------------------
 // Channel selection
@@ -37,17 +45,11 @@ function createChannel(name: string, accountId?: string): Channel {
   }
 }
 
-/**
- * Return all configured account IDs for a channel. An empty array means
- * the user has not yet run setup. A single-element array is normal for
- * channels where one account is the natural model (e.g. WeChat).
- */
 function listAccountIdsForChannel(name: string): string[] {
   switch (name) {
     case 'telegram':
       return listTelegramAccountIds();
     case 'wechat': {
-      // WeChat stays single-account: load the latest and report its ID.
       const probe = new WeChatChannel();
       const acc = probe.loadAccount();
       return acc ? [acc.accountId] : [];
@@ -58,11 +60,12 @@ function listAccountIdsForChannel(name: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Per-bot instance — holds everything a single bot needs
+// BotInstance — per-bot state
 // ---------------------------------------------------------------------------
 
 interface BotInstance {
   accountId: string;
+  label: string;              // human-readable, e.g. "@mybot /path/to/project"
   userId?: string;
   channel: Channel;
   claudeSession: PersistentSession;
@@ -70,6 +73,8 @@ interface BotInstance {
   sharedCtx: { lastContextToken: string };
   activeAbortControllers: Map<string, AbortController>;
   permissionBroker: ReturnType<typeof createPermissionBroker>;
+  /** The forever-running channel.start() promise. */
+  polling: Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +112,250 @@ function promptUser(question: string, defaultValue?: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// DaemonRuntime — single source of truth for running bots. Supports
+// hot-add (/spawn) and hot-remove (/rmbot) from chat.
+// ---------------------------------------------------------------------------
+
+class DaemonRuntime {
+  private readonly instances = new Map<string, BotInstance>();
+  private readonly channelName: string;
+  private readonly config: ReturnType<typeof loadConfig>;
+  private readonly sessionStore: ReturnType<typeof createSessionStore>;
+  private stopping = false;
+
+  constructor(channelName: string, config: ReturnType<typeof loadConfig>, sessionStore: ReturnType<typeof createSessionStore>) {
+    this.channelName = channelName;
+    this.config = config;
+    this.sessionStore = sessionStore;
+  }
+
+  /**
+   * Build a BotInstance for an already-saved account and start its channel
+   * polling in the background. Used by bootstrap and by addTelegramBot.
+   */
+  private startBotForAccount(accountId: string): BotInstance {
+    if (this.instances.has(accountId)) {
+      throw new Error(`Bot already running: ${accountId}`);
+    }
+
+    const channel = createChannel(this.channelName, accountId);
+    const account = channel.loadAccount();
+    if (!account) {
+      throw new Error(`Failed to load account: ${accountId}`);
+    }
+
+    const session: Session = this.sessionStore.load(account.accountId);
+    const desiredCwd = account.workingDirectory ?? this.config.workingDirectory;
+    if (desiredCwd && session.workingDirectory === process.cwd()) {
+      session.workingDirectory = desiredCwd;
+      this.sessionStore.save(account.accountId, session);
+    }
+    if (session.state !== 'idle') {
+      logger.warn('Resetting stale session state', { accountId, state: session.state });
+      session.state = 'idle';
+      this.sessionStore.save(account.accountId, session);
+    }
+
+    const effectivePermissionMode = session.permissionMode ?? this.config.permissionMode;
+    const isAutoPermission = effectivePermissionMode === 'auto';
+    const sdkPermissionMode = isAutoPermission ? 'bypassPermissions' as const : effectivePermissionMode;
+    const cwd = (session.workingDirectory || account.workingDirectory || this.config.workingDirectory || process.cwd())
+      .replace(/^~/, process.env.HOME || '');
+
+    const claudeSession = new PersistentSession({
+      cwd,
+      model: session.model,
+      systemPrompt: this.config.systemPrompt,
+      permissionMode: sdkPermissionMode,
+      resume: session.sdkSessionId,
+    });
+    claudeSession.start();
+
+    const sharedCtx = { lastContextToken: '' };
+    const activeAbortControllers = new Map<string, AbortController>();
+    const permissionBroker = createPermissionBroker(async () => {
+      try {
+        await channel.sendText(account.userId ?? '', sharedCtx.lastContextToken, '⏰ Permission request timed out, auto-denied.');
+      } catch {
+        logger.warn('Failed to send permission timeout message', { accountId });
+      }
+    });
+
+    const label = this.labelFor(accountId, cwd);
+
+    // Build the instance first so message handlers can reference it.
+    const inst: BotInstance = {
+      accountId: account.accountId,
+      label,
+      userId: account.userId,
+      channel,
+      claudeSession,
+      session,
+      sharedCtx,
+      activeAbortControllers,
+      permissionBroker,
+      polling: Promise.resolve(), // replaced below
+    };
+
+    inst.polling = channel.start(
+      async (msg: InboundMessage) => {
+        await handleMessage(msg, inst, this.sessionStore, this.config, this.hooksForInstance(inst));
+      },
+      () => {
+        logger.warn('Channel session expired', { accountId });
+        console.error(`⚠️ Channel session expired for ${accountId}.`);
+      },
+    ).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (this.stopping) return;
+      logger.error('Channel stopped unexpectedly', { accountId, error: msg });
+    });
+
+    this.instances.set(accountId, inst);
+    logger.info('Bot instance started', { accountId, cwd, channel: this.channelName });
+    return inst;
+  }
+
+  private labelFor(accountId: string, cwd: string): string {
+    if (this.channelName === 'telegram' && accountId.startsWith('telegram-')) {
+      const data = loadTelegramAccount(accountId);
+      if (data) return `@${data.botUsername || accountId}  ${cwd}`;
+    }
+    return `${accountId}  ${cwd}`;
+  }
+
+  /**
+   * Build the DaemonHooks object passed to CommandContext. Binds the
+   * triggering instance so /spawn etc. can reply back through it.
+   */
+  private hooksForInstance(triggerInst: BotInstance): DaemonHooks {
+    return {
+      addTelegramBot: (token, cwd) => this.addTelegramBot(token, cwd, triggerInst),
+      removeBot: (accountId) => this.removeBot(accountId, triggerInst),
+      listBots: () => this.listBots(),
+    };
+  }
+
+  async bootstrap(accountIds: string[]): Promise<void> {
+    for (const id of accountIds) {
+      try {
+        this.startBotForAccount(id);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error('Failed to bootstrap bot', { accountId: id, error: msg });
+      }
+    }
+  }
+
+  /** Add and hot-load a new Telegram bot. Invoked via /spawn. */
+  async addTelegramBot(
+    token: string,
+    workingDirectory: string,
+    triggerInst: BotInstance,
+  ): Promise<SpawnBotResult> {
+    if (this.channelName !== 'telegram') {
+      throw new Error(`addTelegramBot is only available when channel=telegram (current: ${this.channelName})`);
+    }
+
+    const ownerUserId = Number(triggerInst.userId);
+    if (!Number.isFinite(ownerUserId) || ownerUserId <= 0) {
+      throw new Error('Cannot determine triggering user ID for ownership');
+    }
+
+    const send = (text: string) =>
+      triggerInst.channel.sendText(triggerInst.userId ?? '', triggerInst.sharedCtx.lastContextToken, text)
+        .catch((err) => logger.warn('Failed to send spawn response', { error: String(err) }));
+
+    let registered;
+    try {
+      registered = await registerTelegramAccount({ token, ownerUserId, workingDirectory });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await send(`⚠️ Failed to register bot: ${msg}`);
+      throw err;
+    }
+
+    if (this.instances.has(registered.accountId)) {
+      // Already running — registration overwrote the account file, but we
+      // should pick up any config changes. Simplest: stop + restart it.
+      logger.info('Bot already running, restarting with new config', { accountId: registered.accountId });
+      await this.removeBotInternal(registered.accountId, /* deleteData */ false);
+    }
+
+    try {
+      this.startBotForAccount(registered.accountId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await send(`⚠️ Registered but failed to start polling: ${msg}`);
+      throw err;
+    }
+
+    const line = `✅ Registered @${registered.username} (${registered.accountId}) in ${workingDirectory}.\n`
+      + 'You can start chatting with it on Telegram now.\n'
+      + '⚠️ Remember to delete your /spawn message so the token is not left in chat history.';
+    await send(line);
+
+    return {
+      accountId: registered.accountId,
+      username: registered.username,
+      workingDirectory,
+    };
+  }
+
+  /** Stop and remove a bot (and its account + session data). */
+  async removeBot(accountId: string, triggerInst?: BotInstance): Promise<boolean> {
+    const existed = this.instances.has(accountId);
+    await this.removeBotInternal(accountId, /* deleteData */ true);
+
+    if (triggerInst) {
+      const reply = existed
+        ? `✅ Removed bot ${accountId} and deleted its data.`
+        : `⚠️ Unknown bot: ${accountId}`;
+      await triggerInst.channel.sendText(triggerInst.userId ?? '', triggerInst.sharedCtx.lastContextToken, reply)
+        .catch((err) => logger.warn('Failed to send rmbot response', { error: String(err) }));
+    }
+    return existed;
+  }
+
+  private async removeBotInternal(accountId: string, deleteData: boolean): Promise<void> {
+    const inst = this.instances.get(accountId);
+    if (inst) {
+      try { inst.claudeSession.close(); } catch {}
+      try { inst.channel.stop(); } catch {}
+      // The polling promise will resolve naturally once channel.stop() kicks in.
+      this.instances.delete(accountId);
+      logger.info('Bot instance removed', { accountId });
+    }
+
+    if (deleteData) {
+      if (accountId.startsWith('telegram-')) {
+        deleteTelegramAccount(accountId);
+      }
+      this.sessionStore.remove(accountId);
+    }
+  }
+
+  listBots(): Array<{ accountId: string; label: string }> {
+    return Array.from(this.instances.values()).map((inst) => ({
+      accountId: inst.accountId,
+      label: inst.label,
+    }));
+  }
+
+  size(): number {
+    return this.instances.size;
+  }
+
+  shutdown(): void {
+    this.stopping = true;
+    for (const inst of this.instances.values()) {
+      try { inst.claudeSession.close(); } catch {}
+      try { inst.channel.stop(); } catch {}
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
 
@@ -126,7 +375,7 @@ async function runSetup(channelName: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Daemon
+// Daemon entry
 // ---------------------------------------------------------------------------
 
 async function runDaemon(): Promise<void> {
@@ -140,108 +389,24 @@ async function runDaemon(): Promise<void> {
     process.exit(1);
   }
 
-  const instances: BotInstance[] = [];
+  const runtime = new DaemonRuntime(channelName, config, sessionStore);
+  await runtime.bootstrap(accountIds);
 
-  for (const accountId of accountIds) {
-    const channel = createChannel(channelName, accountId);
-    const account = channel.loadAccount();
-    if (!account) {
-      logger.warn('Skipping account — failed to load', { accountId });
-      continue;
-    }
-
-    const session: Session = sessionStore.load(account.accountId);
-
-    // Backfill session.workingDirectory: prefer account's per-bot dir, then
-    // global config, then leave alone.
-    const desiredCwd = account.workingDirectory ?? config.workingDirectory;
-    if (desiredCwd && session.workingDirectory === process.cwd()) {
-      session.workingDirectory = desiredCwd;
-      sessionStore.save(account.accountId, session);
-    }
-
-    if (session.state !== 'idle') {
-      logger.warn('Resetting stale session state on startup', {
-        accountId: account.accountId,
-        state: session.state,
-      });
-      session.state = 'idle';
-      sessionStore.save(account.accountId, session);
-    }
-
-    const effectivePermissionMode = session.permissionMode ?? config.permissionMode;
-    const isAutoPermission = effectivePermissionMode === 'auto';
-    const sdkPermissionMode = isAutoPermission ? 'bypassPermissions' as const : effectivePermissionMode;
-    const cwd = (session.workingDirectory || account.workingDirectory || config.workingDirectory || process.cwd())
-      .replace(/^~/, process.env.HOME || '');
-
-    const claudeSession = new PersistentSession({
-      cwd,
-      model: session.model,
-      systemPrompt: config.systemPrompt,
-      permissionMode: sdkPermissionMode,
-      resume: session.sdkSessionId,
-    });
-    claudeSession.start();
-
-    const sharedCtx = { lastContextToken: '' };
-    const activeAbortControllers = new Map<string, AbortController>();
-    const permissionBroker = createPermissionBroker(async () => {
-      try {
-        await channel.sendText(account.userId ?? '', sharedCtx.lastContextToken, '⏰ Permission request timed out, auto-denied.');
-      } catch {
-        logger.warn('Failed to send permission timeout message', { accountId: account.accountId });
-      }
-    });
-
-    instances.push({
-      accountId: account.accountId,
-      userId: account.userId,
-      channel,
-      claudeSession,
-      session,
-      sharedCtx,
-      activeAbortControllers,
-      permissionBroker,
-    });
-
-    logger.info('Bot instance ready', { accountId: account.accountId, cwd, channel: channelName });
-  }
-
-  if (instances.length === 0) {
+  if (runtime.size() === 0) {
     console.error('No bot instances could be started.');
     process.exit(1);
   }
 
-  // -- Shutdown --
-  function shutdown(): void {
-    logger.info('Shutting down...');
-    for (const inst of instances) {
-      try { inst.claudeSession.close(); } catch {}
-      try { inst.channel.stop(); } catch {}
-    }
-    process.exit(0);
-  }
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => { logger.info('Shutting down...'); runtime.shutdown(); process.exit(0); });
+  process.on('SIGTERM', () => { logger.info('Shutting down...'); runtime.shutdown(); process.exit(0); });
 
-  logger.info('Daemon started', { channel: channelName, bots: instances.length });
-  console.log(`Started (channel=${channelName}, bots=${instances.length})`);
-  for (const inst of instances) console.log(`  - ${inst.accountId}`);
+  logger.info('Daemon started', { channel: channelName, bots: runtime.size() });
+  console.log(`Started (channel=${channelName}, bots=${runtime.size()})`);
+  for (const b of runtime.listBots()) console.log(`  - ${b.accountId}  ${b.label}`);
 
-  // Run all bots concurrently. Channel.start() polls forever; Promise.all
-  // keeps the process alive until any channel stops.
-  await Promise.all(instances.map((inst) =>
-    inst.channel.start(
-      async (msg: InboundMessage) => {
-        await handleMessage(msg, inst, sessionStore, config);
-      },
-      () => {
-        logger.warn('Channel session expired', { accountId: inst.accountId });
-        console.error(`⚠️ Channel session expired for ${inst.accountId}.`);
-      },
-    ),
-  ));
+  // Keep the process alive forever. Individual bot polling runs in the
+  // background; we wait on an unresolved promise so SIGINT/SIGTERM fire.
+  await new Promise<void>(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +418,7 @@ async function handleMessage(
   inst: BotInstance,
   sessionStore: ReturnType<typeof createSessionStore>,
   config: ReturnType<typeof loadConfig>,
+  daemon: DaemonHooks,
 ): Promise<void> {
   const { accountId, channel, session, permissionBroker, sharedCtx, activeAbortControllers: activeControllers, claudeSession } = inst;
   const contextToken = msg.contextToken;
@@ -331,6 +497,7 @@ async function handleMessage(
       clearSession: () => sessionStore.clear(accountId),
       getChatHistoryText: (limit?: number) => sessionStore.getChatHistoryText(session, limit),
       rejectPendingPermission: () => permissionBroker.rejectPending(accountId),
+      daemon,
       text: userText,
     };
 
@@ -381,7 +548,6 @@ async function sendToClaude(
   sessionStore.addChatMessage(session, 'user', userText || '(image)');
 
   try {
-    // Convert channel-agnostic ImageData[] to Claude SDK format
     const sdkImages: SendOptions['images'] = images?.map((img) => ({
       type: 'image',
       source: { type: 'base64', media_type: img.mediaType, data: img.base64Data },

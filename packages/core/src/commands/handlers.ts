@@ -1,33 +1,39 @@
 import type { CommandContext, CommandResult } from './router.js';
 import { scanAllSkills, formatSkillList, findSkill, type SkillInfo } from '../claude/skill-scanner.js';
 import { loadConfig, saveConfig } from '../config.js';
+import { logger } from '../logger.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const HELP_TEXT = `可用命令：
+const HELP_TEXT = `Commands:
 
-会话管理：
-  /help             显示帮助
-  /clear            清除当前会话
-  /reset            完全重置（包括工作目录等设置）
-  /status           查看当前会话状态
-  /compact          压缩上下文（开始新 SDK 会话，保留历史）
-  /history [数量]   查看对话记录（默认最近20条）
-  /undo [数量]      撤销最近对话（默认1条）
+Session:
+  /help             Show this help
+  /clear            Clear the current session
+  /reset            Full reset (includes working directory etc.)
+  /status           Show session state
+  /compact          Compact context (start a new SDK session, keep history)
+  /history [n]      Show conversation history (default last 20)
+  /undo [n]         Undo last n turns (default 1)
 
-配置：
-  /cwd [路径]       查看或切换工作目录
-  /model [名称]     查看或切换 Claude 模型
-  /permission [模式] 查看或切换权限模式
-  /prompt [内容]    查看或设置系统提示词（全局生效）
+Config:
+  /cwd [path]       Show or change working directory
+  /model [name]     Show or change Claude model
+  /permission [mode]  Show or change permission mode
+  /prompt [text]    Show or set the system prompt (global)
 
-其他：
-  /skills [full]    列出已安装的 skill（full 显示描述）
-  /version          查看版本信息
-  /<skill> [参数]   触发已安装的 skill
+Bots (Telegram only):
+  /bots             List all running bots
+  /spawn <token> <cwd>  Add a new bot (get token from @BotFather first)
+  /rmbot <accountId>    Remove a bot and delete its data
 
-直接输入文字即可与 Claude Code 对话`;
+Other:
+  /skills [full]    List installed skills (full shows descriptions)
+  /version          Show version
+  /<skill> [args]   Invoke an installed skill
+
+Just send a message to talk to Claude Code.`;
 
 // 缓存 skill 列表，避免每次命令都扫描文件系统
 let cachedSkills: SkillInfo[] | null = null;
@@ -239,6 +245,122 @@ export function handleUnknown(cmd: string, args: string): CommandResult {
 
   return {
     handled: true,
-    reply: `未找到 skill: ${cmd}\n输入 /skills 查看可用列表`,
+    reply: `Skill not found: ${cmd}\nRun /skills to see the list.`,
   };
+}
+
+/** Telegram bot token format: <digits>:<alnum/-/_>{35,} */
+const TELEGRAM_TOKEN_RE = /^\d+:[A-Za-z0-9_-]{35,}$/;
+
+/** Register and hot-load a new Telegram bot from chat. */
+export function handleSpawn(ctx: CommandContext, args: string): CommandResult {
+  if (!ctx.daemon) {
+    return {
+      reply: '⚠️ /spawn is not available in this context.',
+      handled: true,
+    };
+  }
+
+  const trimmed = args.trim();
+  if (!trimmed) {
+    return {
+      reply: [
+        'Usage: /spawn <bot_token> <working_directory>',
+        '',
+        '1. Create a new bot via @BotFather (/newbot) and copy the token.',
+        '2. Open the new bot and tap Start.',
+        '3. Send /spawn <token> <path> here.',
+        '',
+        'IMPORTANT: delete your /spawn message after this bot confirms,',
+        'so your token does not stay in chat history.',
+      ].join('\n'),
+      handled: true,
+    };
+  }
+
+  const firstSpace = trimmed.indexOf(' ');
+  if (firstSpace === -1) {
+    return { reply: 'Usage: /spawn <bot_token> <working_directory>', handled: true };
+  }
+  const token = trimmed.slice(0, firstSpace).trim();
+  const cwd = trimmed.slice(firstSpace + 1).trim();
+
+  if (!TELEGRAM_TOKEN_RE.test(token)) {
+    return { reply: '⚠️ Invalid bot token format. Copy it from @BotFather.', handled: true };
+  }
+  if (!cwd) {
+    return { reply: 'Usage: /spawn <bot_token> <working_directory>', handled: true };
+  }
+
+  // Fire-and-forget: daemon.addTelegramBot is async (hits the Telegram API).
+  // Return a placeholder reply now; the daemon will send a follow-up message
+  // once registration completes.
+  const daemon = ctx.daemon;
+  const startReply = '⏳ Validating token and spawning bot…';
+
+  // Actual work runs in claudePrompt-style async path via the daemon context.
+  // We schedule it as a background task attached to the command result.
+  ctx.daemon = daemon; // reassign for closure capture
+  queueMicrotask(async () => {
+    try {
+      await daemon.addTelegramBot(token, cwd);
+      // Follow-up confirmation is sent by the daemon itself (has channel access).
+    } catch (err) {
+      logger.error('Spawn failed', { error: err instanceof Error ? err.message : String(err) });
+      // Daemon is expected to send the error message back to the chat; if it
+      // cannot, the failure will surface in logs.
+    }
+  });
+
+  return { reply: startReply, handled: true };
+}
+
+/** Remove a bot from the daemon and delete its data. */
+export function handleRmbot(ctx: CommandContext, args: string): CommandResult {
+  if (!ctx.daemon) {
+    return { reply: '⚠️ /rmbot is not available in this context.', handled: true };
+  }
+
+  const targetId = args.trim();
+  if (!targetId) {
+    return {
+      reply: 'Usage: /rmbot <accountId>\nRun /bots to see accountIds.',
+      handled: true,
+    };
+  }
+
+  if (targetId === ctx.accountId) {
+    return {
+      reply: '⚠️ Cannot remove the bot you are currently talking to. Use another bot, or stop the daemon and edit files manually.',
+      handled: true,
+    };
+  }
+
+  const daemon = ctx.daemon;
+  queueMicrotask(async () => {
+    try {
+      await daemon.removeBot(targetId);
+    } catch (err) {
+      logger.error('rmbot failed', { error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  return { reply: `⏳ Removing ${targetId}…`, handled: true };
+}
+
+/** List all running bots in the daemon. */
+export function handleBots(ctx: CommandContext): CommandResult {
+  if (!ctx.daemon) {
+    return { reply: '⚠️ /bots is not available in this context.', handled: true };
+  }
+  const bots = ctx.daemon.listBots();
+  if (bots.length === 0) {
+    return { reply: 'No bots running.', handled: true };
+  }
+  const lines = ['Running bots:', ''];
+  for (const b of bots) {
+    const marker = b.accountId === ctx.accountId ? ' (you)' : '';
+    lines.push(`  ${b.accountId}${marker}  ${b.label}`);
+  }
+  return { reply: lines.join('\n'), handled: true };
 }

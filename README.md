@@ -86,6 +86,15 @@ npm run daemon -- restart
 npm run daemon -- logs
 ```
 
+## Running multiple Telegram bots
+
+One daemon can run multiple Telegram bots at once — each with its own
+working directory, its own Claude Code subprocess, and isolated session
+history. Run `npm run setup -- telegram` once per bot.
+
+See **[docs/multi-bot.md](docs/multi-bot.md)** for adding, listing,
+changing, and removing bots.
+
 ## Chat Commands
 
 | Command | Description |

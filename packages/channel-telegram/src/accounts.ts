@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync, unlinkSync } from 'node:fs';
+import { Bot } from 'grammy';
 import { loadJson, saveJson, logger } from '@claude-bridge/core';
 
 export interface TelegramAccountData {
@@ -82,4 +83,53 @@ export function listTelegramAccountIds(): string[] {
   } catch {
     return [];
   }
+}
+
+/** Delete a telegram account's credentials file. No-op if already gone. */
+export function deleteTelegramAccount(accountId: string): void {
+  try {
+    unlinkSync(accountPath(accountId));
+    logger.info('Telegram account deleted', { accountId });
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') {
+      logger.warn('Failed to delete telegram account', { accountId, error: err?.message });
+    }
+  }
+}
+
+/**
+ * Non-interactive registration: validate the token via getMe and persist
+ * the account. Used by /spawn (hot-load from chat) and by tests. Setup
+ * still uses its own prompt-driven flow.
+ */
+export async function registerTelegramAccount(opts: {
+  token: string;
+  ownerUserId: number;
+  workingDirectory: string;
+}): Promise<{ accountId: string; botId: number; username: string }> {
+  if (!opts.token) throw new Error('token is required');
+  if (!opts.workingDirectory) throw new Error('workingDirectory is required');
+  if (!Number.isFinite(opts.ownerUserId) || opts.ownerUserId <= 0) {
+    throw new Error('ownerUserId must be a positive number');
+  }
+
+  const probeBot = new Bot(opts.token);
+  let me;
+  try {
+    me = await probeBot.api.getMe();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid bot token: ${msg}`);
+  }
+
+  const data: TelegramAccountData = {
+    botToken: opts.token,
+    botId: me.id,
+    botUsername: me.username ?? '',
+    ownerUserId: opts.ownerUserId,
+    workingDirectory: opts.workingDirectory,
+    createdAt: new Date().toISOString(),
+  };
+  const id = saveTelegramAccount(data);
+  return { accountId: id, botId: me.id, username: me.username ?? '' };
 }

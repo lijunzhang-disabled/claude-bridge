@@ -1,5 +1,5 @@
 import { loadJson, saveJson } from './store.js';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, unlinkSync } from 'node:fs';
 import { DATA_DIR } from './constants.js';
 import { join } from 'node:path';
 import { logger } from './logger.js';
@@ -130,5 +130,16 @@ export function createSessionStore() {
     return lines.join('\n');
   }
 
-  return { load, save, clear, addChatMessage, getChatHistoryText };
+  function remove(accountId: string): void {
+    try {
+      unlinkSync(getSessionPath(accountId));
+      logger.info('Session deleted', { accountId });
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') {
+        logger.warn('Failed to delete session', { accountId, error: err?.message });
+      }
+    }
+  }
+
+  return { load, save, clear, remove, addChatMessage, getChatHistoryText };
 }
