@@ -23,6 +23,8 @@ Config:
   /model [name]     Show or change Claude model
   /permission [mode]  Show or change permission mode
   /prompt [text]    Show or set the system prompt (global)
+  /yolo             Auto-approve every tool call (dangerous)
+  /un-yolo          Exit YOLO mode, restore permission prompts
 
 Bots (Telegram only):
   /bots             List all running bots
@@ -247,6 +249,47 @@ export function handleUnknown(cmd: string, args: string): CommandResult {
   return {
     handled: true,
     reply: `Skill not found: ${cmd}\nRun /skills to see the list.`,
+  };
+}
+
+/**
+ * YOLO mode: Claude auto-approves every tool call for this bot's session.
+ * Persisted via session.permissionMode so it survives daemon restarts.
+ */
+export function handleYolo(ctx: CommandContext): CommandResult {
+  if (ctx.session.permissionMode === 'auto') {
+    return {
+      reply: '🤘 YOLO mode is already ON for this bot.\nUse /un-yolo to disable.',
+      handled: true,
+    };
+  }
+  ctx.updateSession({ permissionMode: 'auto' });
+  return {
+    reply: [
+      '🤘 YOLO mode ON for this bot.',
+      '',
+      'Claude will auto-approve every tool call — Bash, Edit, Write, everything.',
+      'No permission prompts. Applies only to this bot (other bots keep their setting).',
+      'Persists across daemon restarts.',
+      '',
+      '⚠️ Dangerous. Use /un-yolo to disable.',
+    ].join('\n'),
+    handled: true,
+  };
+}
+
+/** Exit YOLO mode — restore the default permission gate. */
+export function handleUnyolo(ctx: CommandContext): CommandResult {
+  if (ctx.session.permissionMode !== 'auto') {
+    return {
+      reply: 'YOLO mode is not active for this bot. Nothing to do.',
+      handled: true,
+    };
+  }
+  ctx.updateSession({ permissionMode: 'default' });
+  return {
+    reply: '✅ YOLO mode OFF — permission prompts restored for this bot.',
+    handled: true,
   };
 }
 

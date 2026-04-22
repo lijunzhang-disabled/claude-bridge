@@ -1,7 +1,7 @@
 import type { Session } from '../session.js';
 import { findSkill } from '../claude/skill-scanner.js';
 import { logger } from '../logger.js';
-import { handleHelp, handleClear, handleCwd, handleModel, handlePermission, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleSpawn, handleRmbot, handleBots, handleUnknown } from './handlers.js';
+import { handleHelp, handleClear, handleCwd, handleModel, handlePermission, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleSpawn, handleRmbot, handleBots, handleYolo, handleUnyolo, handleUnknown } from './handlers.js';
 
 export interface SpawnBotResult {
   accountId: string;
@@ -106,6 +106,11 @@ export function routeCommand(ctx: CommandContext): CommandResult {
       return handleRmbot(ctx, args);
     case 'bots':
       return handleBots(ctx);
+    case 'yolo':
+      return handleYolo(ctx);
+    case 'un-yolo':
+    case 'unyolo':
+      return handleUnyolo(ctx);
     default:
       return handleUnknown(cmd, args);
   }
