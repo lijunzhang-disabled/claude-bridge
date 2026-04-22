@@ -14,6 +14,12 @@ export interface TelegramAccountData {
   ownerUserId: number;
   /** Working directory this bot operates in (each bot = one project) */
   workingDirectory: string;
+  /**
+   * If true, the daemon will not start this bot on boot. Use /pause to set,
+   * /resume to clear. Frees the Claude subprocess (~200 MB RAM) while keeping
+   * the account + session history.
+   */
+  paused?: boolean;
   createdAt: string;
 }
 

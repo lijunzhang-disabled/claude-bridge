@@ -1,7 +1,7 @@
 import type { Session } from '../session.js';
 import { findSkill } from '../claude/skill-scanner.js';
 import { logger } from '../logger.js';
-import { handleHelp, handleClear, handleCwd, handleModel, handlePermission, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleSpawn, handleRmbot, handleBots, handleYolo, handleUnyolo, handleUnknown } from './handlers.js';
+import { handleHelp, handleClear, handleCwd, handleModel, handlePermission, handleStatus, handleSkills, handleHistory, handleReset, handleCompact, handleUndo, handleVersion, handlePrompt, handleSpawn, handleRmbot, handleBots, handlePause, handleResume, handleYolo, handleUnyolo, handleUnknown } from './handlers.js';
 
 export interface SpawnBotResult {
   accountId: string;
@@ -27,8 +27,24 @@ export interface DaemonHooks {
    */
   removeBot(accountId: string): Promise<boolean>;
 
-  /** List currently running bot instances (accountId + human-readable label). */
-  listBots(): Array<{ accountId: string; label: string }>;
+  /**
+   * Pause a bot: stop its polling, close its Claude subprocess, persist the
+   * paused flag. Account and session files are kept. Returns false if the
+   * bot was not running.
+   */
+  pauseBot(accountId: string): Promise<boolean>;
+
+  /**
+   * Resume a paused bot: clear the paused flag and start polling + Claude
+   * again. Returns false if the bot is not configured or already running.
+   */
+  resumeBot(accountId: string): Promise<boolean>;
+
+  /**
+   * List every bot the daemon knows about — running and paused — with a
+   * human-readable label.
+   */
+  listBots(): Array<{ accountId: string; label: string; status: 'running' | 'paused' }>;
 }
 
 export interface CommandContext {
@@ -106,6 +122,10 @@ export function routeCommand(ctx: CommandContext): CommandResult {
       return handleRmbot(ctx, args);
     case 'bots':
       return handleBots(ctx);
+    case 'pause':
+      return handlePause(ctx, args);
+    case 'resume':
+      return handleResume(ctx, args);
     case 'yolo':
       return handleYolo(ctx);
     case 'un-yolo':

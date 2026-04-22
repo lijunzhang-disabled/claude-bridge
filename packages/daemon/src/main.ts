@@ -27,6 +27,7 @@ import {
   listTelegramAccountIds,
   deleteTelegramAccount,
   loadTelegramAccount,
+  saveTelegramAccount,
   registerTelegramAccount,
 } from '@claude-bridge/channel-telegram';
 
@@ -253,12 +254,35 @@ class DaemonRuntime {
     return {
       addTelegramBot: (token, cwd) => this.addTelegramBot(token, cwd, triggerInst),
       removeBot: (accountId) => this.removeBot(accountId, triggerInst),
+      pauseBot: (accountId) => this.pauseBot(accountId, triggerInst),
+      resumeBot: (accountId) => this.resumeBot(accountId, triggerInst),
       listBots: () => this.listBots(),
     };
   }
 
+  /** Return true if a telegram account is marked paused. */
+  private isPaused(accountId: string): boolean {
+    if (!accountId.startsWith('telegram-')) return false;
+    const data = loadTelegramAccount(accountId);
+    return Boolean(data?.paused);
+  }
+
+  /** Persist the paused flag on a telegram account file. */
+  private setPausedFlag(accountId: string, paused: boolean): boolean {
+    if (!accountId.startsWith('telegram-')) return false;
+    const data = loadTelegramAccount(accountId);
+    if (!data) return false;
+    data.paused = paused;
+    saveTelegramAccount(data);
+    return true;
+  }
+
   async bootstrap(accountIds: string[]): Promise<void> {
     for (const id of accountIds) {
+      if (this.isPaused(id)) {
+        logger.info('Skipping paused bot on bootstrap', { accountId: id });
+        continue;
+      }
       try {
         this.startBotForAccount(id);
       } catch (err) {
@@ -335,6 +359,84 @@ class DaemonRuntime {
     };
   }
 
+  /**
+   * Pause a bot: stop polling + close Claude subprocess, keep the account and
+   * session files. Persists paused=true so daemon restarts don't revive it.
+   */
+  async pauseBot(accountId: string, triggerInst?: BotInstance): Promise<boolean> {
+    const send = triggerInst
+      ? (text: string) =>
+          triggerInst.channel.sendText(triggerInst.userId ?? '', triggerInst.sharedCtx.lastContextToken, text)
+            .catch((err) => logger.warn('Failed to send pause response', { error: String(err) }))
+      : async (_text: string) => {};
+
+    if (triggerInst && accountId === triggerInst.accountId) {
+      await send('⚠️ Cannot pause the bot you are currently talking to. Pause it from another bot.');
+      return false;
+    }
+
+    if (!this.isPaused(accountId) && !this.instances.has(accountId)) {
+      await send(`⚠️ Unknown bot: ${accountId}`);
+      return false;
+    }
+
+    if (!this.instances.has(accountId)) {
+      // Already paused.
+      await send(`ℹ️ ${accountId} is already paused.`);
+      return false;
+    }
+
+    // Set paused flag first so if startup races, next bootstrap skips it.
+    if (!this.setPausedFlag(accountId, true)) {
+      await send(`⚠️ Could not mark ${accountId} as paused (account data missing).`);
+      return false;
+    }
+
+    await this.removeBotInternal(accountId, /* deleteData */ false);
+    logger.info('Bot paused', { accountId });
+    await send(`⏸  Paused ${accountId}. Its account + session are kept; /resume to restart.`);
+    return true;
+  }
+
+  /**
+   * Resume a paused bot: clear the paused flag and start polling + Claude
+   * again. Returns false if the bot is unknown or already running.
+   */
+  async resumeBot(accountId: string, triggerInst?: BotInstance): Promise<boolean> {
+    const send = triggerInst
+      ? (text: string) =>
+          triggerInst.channel.sendText(triggerInst.userId ?? '', triggerInst.sharedCtx.lastContextToken, text)
+            .catch((err) => logger.warn('Failed to send resume response', { error: String(err) }))
+      : async (_text: string) => {};
+
+    if (this.instances.has(accountId)) {
+      await send(`ℹ️ ${accountId} is already running.`);
+      return false;
+    }
+
+    if (!accountId.startsWith('telegram-') || !loadTelegramAccount(accountId)) {
+      await send(`⚠️ Unknown bot: ${accountId}`);
+      return false;
+    }
+
+    if (!this.setPausedFlag(accountId, false)) {
+      await send(`⚠️ Could not update ${accountId}'s account file.`);
+      return false;
+    }
+
+    try {
+      this.startBotForAccount(accountId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await send(`⚠️ Failed to resume ${accountId}: ${msg}`);
+      throw err;
+    }
+
+    logger.info('Bot resumed', { accountId });
+    await send(`▶️  Resumed ${accountId}.`);
+    return true;
+  }
+
   /** Stop and remove a bot (and its account + session data). */
   async removeBot(accountId: string, triggerInst?: BotInstance): Promise<boolean> {
     const existed = this.instances.has(accountId);
@@ -368,11 +470,29 @@ class DaemonRuntime {
     }
   }
 
-  listBots(): Array<{ accountId: string; label: string }> {
-    return Array.from(this.instances.values()).map((inst) => ({
+  listBots(): Array<{ accountId: string; label: string; status: 'running' | 'paused' }> {
+    const running = Array.from(this.instances.values()).map((inst) => ({
       accountId: inst.accountId,
       label: inst.label,
+      status: 'running' as const,
     }));
+
+    // Enumerate paused accounts on disk (known to the daemon's channel) that
+    // aren't currently running.
+    const paused: Array<{ accountId: string; label: string; status: 'paused' }> = [];
+    if (this.channelName === 'telegram') {
+      for (const id of listTelegramAccountIds()) {
+        if (this.instances.has(id)) continue;
+        if (!this.isPaused(id)) continue;
+        const data = loadTelegramAccount(id);
+        const label = data
+          ? `@${data.botUsername || id}  ${data.workingDirectory}`
+          : id;
+        paused.push({ accountId: id, label, status: 'paused' });
+      }
+    }
+
+    return [...running, ...paused];
   }
 
   size(): number {

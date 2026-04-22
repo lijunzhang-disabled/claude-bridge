@@ -27,9 +27,11 @@ Config:
   /un-yolo          Exit YOLO mode, restore permission prompts
 
 Bots (Telegram only):
-  /bots             List all running bots
-  /spawn <token> <cwd>  Add a new bot (get token from @BotFather first)
-  /rmbot <accountId>    Remove a bot and delete its data
+  /bots                  List all bots (running + paused)
+  /spawn <token> <cwd>   Add a new bot (get token from @BotFather first)
+  /pause <accountId>     Stop a bot, keep its data (frees ~200MB RAM)
+  /resume <accountId>    Start a paused bot again
+  /rmbot <accountId>     Remove a bot and delete its data
 
 Other:
   /skills [full]    List installed skills (full shows descriptions)
@@ -434,19 +436,81 @@ export function handleRmbot(ctx: CommandContext, args: string): CommandResult {
   return { reply: `⏳ Removing ${targetId}…`, handled: true };
 }
 
-/** List all running bots in the daemon. */
+/** List all bots (running and paused) in the daemon. */
 export function handleBots(ctx: CommandContext): CommandResult {
   if (!ctx.daemon) {
     return { reply: '⚠️ /bots is not available in this context.', handled: true };
   }
   const bots = ctx.daemon.listBots();
   if (bots.length === 0) {
-    return { reply: 'No bots running.', handled: true };
+    return { reply: 'No bots configured.', handled: true };
   }
-  const lines = ['Running bots:', ''];
+  const lines = ['Bots:', ''];
   for (const b of bots) {
-    const marker = b.accountId === ctx.accountId ? ' (you)' : '';
-    lines.push(`  ${b.accountId}${marker}  ${b.label}`);
+    const you = b.accountId === ctx.accountId ? ' (you)' : '';
+    const status = b.status === 'paused' ? '⏸  ' : '▶️  ';
+    lines.push(`  ${status}${b.accountId}${you}  ${b.label}`);
   }
+  lines.push('');
+  lines.push('▶️ = running, ⏸  = paused (use /resume <accountId> to restart)');
   return { reply: lines.join('\n'), handled: true };
+}
+
+/** Pause a bot (stop polling + Claude, keep account + session). */
+export function handlePause(ctx: CommandContext, args: string): CommandResult {
+  if (!ctx.daemon) {
+    return { reply: '⚠️ /pause is not available in this context.', handled: true };
+  }
+
+  const targetId = args.trim();
+  if (!targetId) {
+    return {
+      reply: 'Usage: /pause <accountId>\nRun /bots to see accountIds.',
+      handled: true,
+    };
+  }
+
+  if (targetId === ctx.accountId) {
+    return {
+      reply: '⚠️ Cannot pause the bot you are currently talking to. Pause it from another bot.',
+      handled: true,
+    };
+  }
+
+  const daemon = ctx.daemon;
+  queueMicrotask(async () => {
+    try {
+      await daemon.pauseBot(targetId);
+    } catch (err) {
+      logger.error('pause failed', { error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  return { reply: `⏳ Pausing ${targetId}…`, handled: true };
+}
+
+/** Resume a paused bot. */
+export function handleResume(ctx: CommandContext, args: string): CommandResult {
+  if (!ctx.daemon) {
+    return { reply: '⚠️ /resume is not available in this context.', handled: true };
+  }
+
+  const targetId = args.trim();
+  if (!targetId) {
+    return {
+      reply: 'Usage: /resume <accountId>\nRun /bots to see paused bots.',
+      handled: true,
+    };
+  }
+
+  const daemon = ctx.daemon;
+  queueMicrotask(async () => {
+    try {
+      await daemon.resumeBot(targetId);
+    } catch (err) {
+      logger.error('resume failed', { error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  return { reply: `⏳ Resuming ${targetId}…`, handled: true };
 }
