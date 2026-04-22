@@ -2,8 +2,9 @@ import type { CommandContext, CommandResult } from './router.js';
 import { scanAllSkills, formatSkillList, findSkill, type SkillInfo } from '../claude/skill-scanner.js';
 import { loadConfig, saveConfig } from '../config.js';
 import { logger } from '../logger.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const HELP_TEXT = `Commands:
@@ -286,10 +287,52 @@ export function handleSpawn(ctx: CommandContext, args: string): CommandResult {
   const cwd = trimmed.slice(firstSpace + 1).trim();
 
   if (!TELEGRAM_TOKEN_RE.test(token)) {
-    return { reply: '⚠️ Invalid bot token format. Copy it from @BotFather.', handled: true };
+    return {
+      reply: [
+        '⚠️ Invalid bot token format.',
+        '',
+        'Expected: <digits>:<letters/digits/-/_>',
+        'Example: 1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ...',
+        '',
+        'Copy the token from @BotFather exactly as given, with no quotes or extra spaces.',
+      ].join('\n'),
+      handled: true,
+    };
   }
   if (!cwd) {
     return { reply: 'Usage: /spawn <bot_token> <working_directory>', handled: true };
+  }
+
+  // Expand ~ and validate the working directory before firing the async task,
+  // so a typo doesn't produce a "✅ Registered" followed by a silently broken
+  // bot that can never respond.
+  const expandedCwd = cwd.startsWith('~')
+    ? join(homedir(), cwd.slice(cwd.startsWith('~/') ? 2 : 1))
+    : cwd;
+  try {
+    const st = statSync(expandedCwd);
+    if (!st.isDirectory()) {
+      return {
+        reply: `⚠️ Working directory is not a directory: ${expandedCwd}`,
+        handled: true,
+      };
+    }
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') {
+      return {
+        reply: [
+          `⚠️ Working directory not found: ${expandedCwd}`,
+          '',
+          'Check for typos. The path must exist on this machine. If the path contains spaces,',
+          '/spawn does not support them — rename the directory or use a symlink.',
+        ].join('\n'),
+        handled: true,
+      };
+    }
+    return {
+      reply: `⚠️ Cannot access working directory ${expandedCwd}: ${err?.message ?? String(err)}`,
+      handled: true,
+    };
   }
 
   // Fire-and-forget: daemon.addTelegramBot is async (hits the Telegram API).
@@ -303,7 +346,7 @@ export function handleSpawn(ctx: CommandContext, args: string): CommandResult {
   ctx.daemon = daemon; // reassign for closure capture
   queueMicrotask(async () => {
     try {
-      await daemon.addTelegramBot(token, cwd);
+      await daemon.addTelegramBot(token, expandedCwd);
       // Follow-up confirmation is sent by the daemon itself (has channel access).
     } catch (err) {
       logger.error('Spawn failed', { error: err instanceof Error ? err.message : String(err) });

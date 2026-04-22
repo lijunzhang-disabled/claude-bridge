@@ -45,6 +45,27 @@ function createChannel(name: string, accountId?: string): Channel {
   }
 }
 
+/**
+ * Map raw grammy / getMe errors to a friendlier hint so the user knows what
+ * to try next. Returns empty string if we don't recognize the error.
+ */
+function diagnoseTokenError(msg: string): string {
+  const m = msg.toLowerCase();
+  if (m.includes('unauthorized') || m.includes('401')) {
+    return 'Hint: the bot token is wrong or was revoked. Go to @BotFather → /mybots → pick the bot → API Token to copy a fresh token.';
+  }
+  if (m.includes('not found') || m.includes('404')) {
+    return 'Hint: Telegram does not recognize this token. It may have been deleted via @BotFather.';
+  }
+  if (m.includes('etimedout') || m.includes('enotfound') || m.includes('network') || m.includes('fetch failed')) {
+    return 'Hint: could not reach Telegram. Check your internet connection and any firewall/proxy.';
+  }
+  if (m.includes('too many requests') || m.includes('429')) {
+    return 'Hint: rate-limited by Telegram. Wait a minute and try again.';
+  }
+  return '';
+}
+
 function listAccountIdsForChannel(name: string): string[] {
   switch (name) {
     case 'telegram':
@@ -253,25 +274,30 @@ class DaemonRuntime {
     workingDirectory: string,
     triggerInst: BotInstance,
   ): Promise<SpawnBotResult> {
+    const send = (text: string) =>
+      triggerInst.channel.sendText(triggerInst.userId ?? '', triggerInst.sharedCtx.lastContextToken, text)
+        .catch((err) => logger.warn('Failed to send spawn response', { error: String(err) }));
+
+    // Pre-validation — send the error to the chat before throwing so the user
+    // always sees something after the initial "⏳ Validating…" placeholder.
     if (this.channelName !== 'telegram') {
-      throw new Error(`addTelegramBot is only available when channel=telegram (current: ${this.channelName})`);
+      await send(`⚠️ /spawn is only available when channel=telegram (current: ${this.channelName}).`);
+      throw new Error(`addTelegramBot called with channel=${this.channelName}`);
     }
 
     const ownerUserId = Number(triggerInst.userId);
     if (!Number.isFinite(ownerUserId) || ownerUserId <= 0) {
+      await send('⚠️ Cannot determine your Telegram user ID from this chat. Try again from a different bot.');
       throw new Error('Cannot determine triggering user ID for ownership');
     }
-
-    const send = (text: string) =>
-      triggerInst.channel.sendText(triggerInst.userId ?? '', triggerInst.sharedCtx.lastContextToken, text)
-        .catch((err) => logger.warn('Failed to send spawn response', { error: String(err) }));
 
     let registered;
     try {
       registered = await registerTelegramAccount({ token, ownerUserId, workingDirectory });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await send(`⚠️ Failed to register bot: ${msg}`);
+      const raw = err instanceof Error ? err.message : String(err);
+      const hint = diagnoseTokenError(raw);
+      await send(`⚠️ Failed to validate token with Telegram.\n\n${raw}${hint ? '\n\n' + hint : ''}`);
       throw err;
     }
 
@@ -280,19 +306,26 @@ class DaemonRuntime {
       // should pick up any config changes. Simplest: stop + restart it.
       logger.info('Bot already running, restarting with new config', { accountId: registered.accountId });
       await this.removeBotInternal(registered.accountId, /* deleteData */ false);
+      await send(`ℹ️ @${registered.username} was already registered — restarting with the new working directory.`);
     }
 
     try {
       this.startBotForAccount(registered.accountId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await send(`⚠️ Registered but failed to start polling: ${msg}`);
+      await send(`⚠️ Registered @${registered.username} but failed to start polling: ${msg}\n\nThe account file is saved at ~/.claude-bridge/accounts/${registered.accountId}.json. Restart the daemon to retry.`);
       throw err;
     }
 
-    const line = `✅ Registered @${registered.username} (${registered.accountId}) in ${workingDirectory}.\n`
-      + 'You can start chatting with it on Telegram now.\n'
-      + '⚠️ Remember to delete your /spawn message so the token is not left in chat history.';
+    const line = [
+      `✅ Registered @${registered.username} (${registered.accountId})`,
+      `   in ${workingDirectory}`,
+      '',
+      `Open the chat with @${registered.username} and tap Start, then send a message.`,
+      'If the bot doesn\'t respond, the Start tap is usually the missing step.',
+      '',
+      '⚠️ Delete your /spawn message now so the token does not stay in chat history.',
+    ].join('\n');
     await send(line);
 
     return {
