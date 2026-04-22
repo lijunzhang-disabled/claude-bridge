@@ -130,6 +130,7 @@ export function routeCommand(ctx: CommandContext): CommandResult {
       return handleYolo(ctx);
     case 'un-yolo':
     case 'unyolo':
+    case 'un_yolo':
       return handleUnyolo(ctx);
     default:
       return handleUnknown(cmd, args);

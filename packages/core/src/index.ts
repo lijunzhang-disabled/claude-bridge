@@ -1,6 +1,7 @@
 export * from './channel.js';
 export * from './claude/session.js';
 export * from './claude/provider.js';
+export * from './claude/skill-scanner.js';
 export * from './commands/router.js';
 export * from './commands/handlers.js';
 export * from './config.js';

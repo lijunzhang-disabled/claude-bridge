@@ -72,12 +72,45 @@ function scanDirectory(baseDir: string, depth: number = 2): SkillInfo[] {
 }
 
 /**
+ * Recursively locate every `skills/` directory under baseDir, up to maxDepth
+ * levels deep. Used to handle plugin cache layouts that nest a version
+ * directory (e.g. `<plugin>/<name>/<version>/skills/`).
+ */
+function findSkillsDirs(baseDir: string, maxDepth: number = 4): string[] {
+  const results: string[] = [];
+  if (!existsSync(baseDir)) return results;
+
+  const walk = (dir: string, depth: number): void => {
+    if (depth > maxDepth) return;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const full = join(dir, entry.name);
+      if (entry.name === 'skills') {
+        results.push(full);
+      } else {
+        walk(full, depth + 1);
+      }
+    }
+  };
+
+  walk(baseDir, 0);
+  return results;
+}
+
+/**
  * Scan all known skill directories for installed Claude Code skills.
  *
  * Locations scanned:
  * 1. ~/.claude/skills/ (each subdirectory)
- * 2. ~/.claude/plugins/cache/{plugin}/skills/ (each subdirectory)
- * 3. ~/.claude/plugins/cache/{plugin}/superpowers/skills/ (each subdirectory)
+ * 2. ~/.claude/plugins/cache/<plugin>/.../skills/ (any depth up to 4) —
+ *    covers both flat plugin layouts and versioned ones like
+ *    `<plugin>/<name>/<version>/skills/`
  */
 export function scanAllSkills(): SkillInfo[] {
   const home = homedir();
@@ -94,7 +127,7 @@ export function scanAllSkills(): SkillInfo[] {
     }
   }
 
-  // 2. ~/.claude/plugins/cache/*/skills/*/
+  // 2. ~/.claude/plugins/cache/*/**/skills/*/
   const pluginsCacheDir = join(claudeDir, 'plugins', 'cache');
   if (existsSync(pluginsCacheDir)) {
     let cacheEntries: Dirent[];
@@ -107,22 +140,12 @@ export function scanAllSkills(): SkillInfo[] {
     for (const cacheEntry of cacheEntries) {
       if (!cacheEntry.isDirectory()) continue;
       const cacheDir = join(pluginsCacheDir, cacheEntry.name);
-
-      // Regular skills
-      const pluginSkillsDir = join(cacheDir, 'skills');
-      for (const skill of scanDirectory(pluginSkillsDir, 1)) {
-        if (!seen.has(skill.name)) {
-          seen.add(skill.name);
-          skills.push(skill);
-        }
-      }
-
-      // Superpowers skills
-      const superpowersSkillsDir = join(cacheDir, 'superpowers', 'skills');
-      for (const skill of scanDirectory(superpowersSkillsDir, 1)) {
-        if (!seen.has(skill.name)) {
-          seen.add(skill.name);
-          skills.push(skill);
+      for (const skillsDir of findSkillsDirs(cacheDir, 4)) {
+        for (const skill of scanDirectory(skillsDir, 1)) {
+          if (!seen.has(skill.name)) {
+            seen.add(skill.name);
+            skills.push(skill);
+          }
         }
       }
     }
@@ -149,11 +172,12 @@ export function formatSkillList(skills: SkillInfo[]): string {
 }
 
 /**
- * Find a skill by name (case-insensitive match).
+ * Find a skill by name. Case-insensitive and agnostic to `-`, `_`, and
+ * whitespace so Telegram autocompleted names (which must use underscores)
+ * match skills defined with hyphens.
  */
 export function findSkill(skills: SkillInfo[], name: string): SkillInfo | undefined {
-  const lower = name.toLowerCase();
-  return skills.find(
-    (s) => s.name.toLowerCase() === lower || s.name.toLowerCase().replace(/\s+/g, '-') === lower,
-  );
+  const normalize = (s: string) => s.toLowerCase().replace(/[\s\-_]+/g, '-');
+  const target = normalize(name);
+  return skills.find((s) => normalize(s.name) === target);
 }

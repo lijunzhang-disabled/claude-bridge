@@ -7,7 +7,7 @@ import type {
   AccountInfo,
   ImageData,
 } from '@claude-bridge/core';
-import { logger } from '@claude-bridge/core';
+import { logger, scanAllSkills } from '@claude-bridge/core';
 
 import {
   saveTelegramAccount,
@@ -16,6 +16,53 @@ import {
   type TelegramAccountData,
 } from './accounts.js';
 import { downloadTelegramFile } from './media.js';
+
+/**
+ * Built-in slash commands exposed via the Telegram "/" autocomplete menu.
+ * Keep names matching Telegram's rules: lowercase [a-z0-9_], max 32 chars.
+ * `un-yolo` is exposed as `un_yolo` because `-` is not allowed.
+ */
+const BUILTIN_COMMANDS: Array<{ command: string; description: string }> = [
+  { command: 'help', description: '显示帮助' },
+  { command: 'status', description: '查看当前状态' },
+  { command: 'skills', description: '列出可用 skill' },
+  { command: 'clear', description: '清空会话上下文' },
+  { command: 'reset', description: '完全重置会话' },
+  { command: 'compact', description: '压缩上下文' },
+  { command: 'history', description: '查看对话历史' },
+  { command: 'undo', description: '撤销最近 N 条对话' },
+  { command: 'cwd', description: '查看或设置工作目录' },
+  { command: 'model', description: '切换 Claude 模型' },
+  { command: 'permission', description: '切换权限模式' },
+  { command: 'prompt', description: '设置系统提示词' },
+  { command: 'yolo', description: '开启 YOLO（自动批准所有工具调用）' },
+  { command: 'un_yolo', description: '关闭 YOLO 模式' },
+  { command: 'bots', description: '列出所有 bot' },
+  { command: 'spawn', description: '新增一个 Telegram bot' },
+  { command: 'rmbot', description: '删除某个 bot' },
+  { command: 'pause', description: '暂停某个 bot' },
+  { command: 'resume', description: '恢复某个 bot' },
+  { command: 'version', description: '显示版本' },
+];
+
+const TELEGRAM_CMD_RE = /^[a-z][a-z0-9_]{0,31}$/;
+const MAX_TELEGRAM_COMMANDS = 100;
+
+function buildCommandMenu(): Array<{ command: string; description: string }> {
+  const cmds = [...BUILTIN_COMMANDS];
+  const builtinNames = new Set(cmds.map((c) => c.command));
+
+  for (const s of scanAllSkills()) {
+    const safe = s.name.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+    if (!TELEGRAM_CMD_RE.test(safe)) continue;
+    if (builtinNames.has(safe)) continue;
+    const desc = (s.description || 'Skill').slice(0, 256);
+    cmds.push({ command: safe, description: desc });
+    if (cmds.length >= MAX_TELEGRAM_COMMANDS) break;
+  }
+
+  return cmds;
+}
 
 function promptUser(question: string, defaultValue?: string): Promise<string> {
   return new Promise((resolve) => {
@@ -167,6 +214,21 @@ export class TelegramChannel implements Channel {
         logger.error('Grammy unknown error', { error: String(err.error) });
       }
     });
+
+    // Publish the "/" autocomplete menu (built-ins + installed skills).
+    // Safe to fail: if Telegram is unreachable we just lose autocomplete.
+    try {
+      const menu = buildCommandMenu();
+      await bot.api.setMyCommands(menu);
+      logger.info('Telegram command menu published', {
+        botId: this.account!.botId,
+        count: menu.length,
+      });
+    } catch (err) {
+      logger.warn('Failed to publish Telegram command menu', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     logger.info('Starting Telegram bot long-poll', {
       botId: this.account!.botId,
