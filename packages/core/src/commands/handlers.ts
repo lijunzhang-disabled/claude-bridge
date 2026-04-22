@@ -239,12 +239,44 @@ export function handlePrompt(_ctx: CommandContext, args: string): CommandResult 
   return { reply: `✅ 系统提示词已设置:\n${config.systemPrompt}`, handled: true };
 }
 
+/**
+ * Read a SKILL.md file and return just the body (frontmatter stripped).
+ * Returns null if the file can't be read.
+ */
+function readSkillBody(skillDir: string): string | null {
+  try {
+    const content = readFileSync(join(skillDir, 'SKILL.md'), 'utf-8');
+    return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
+  } catch (err) {
+    logger.warn('Failed to read SKILL.md', { skillDir, error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
 export function handleUnknown(cmd: string, args: string): CommandResult {
   const skills = getSkills();
   const skill = findSkill(skills, cmd);
 
   if (skill) {
-    const prompt = args ? `Use the ${skill.name} skill: ${args}` : `Use the ${skill.name} skill`;
+    // Inline the skill body into the prompt so Claude follows its
+    // instructions even when the Agent SDK hasn't registered the plugin's
+    // skills natively. Works for any SKILL.md regardless of plugin manifest.
+    const body = readSkillBody(skill.path);
+    if (!body) {
+      return { handled: true, reply: `Found skill "${skill.name}" but failed to read its SKILL.md.` };
+    }
+    const trailer = args
+      ? `User request: ${args}`
+      : 'Acknowledge that the skill is loaded and wait for the user\'s next message before applying it.';
+    const prompt = [
+      `The user invoked the "${skill.name}" skill. The full skill definition is below — follow its instructions exactly.`,
+      '',
+      '--- BEGIN SKILL ---',
+      body,
+      '--- END SKILL ---',
+      '',
+      trailer,
+    ].join('\n');
     return { handled: true, claudePrompt: prompt };
   }
 
