@@ -29,8 +29,8 @@ Config:
 Bots (Telegram only):
   /bots                  List all bots (running + paused)
   /spawn <token> <cwd>   Add a new bot (get token from @BotFather first)
-  /pause <accountId>     Stop a bot, keep its data (frees ~200MB RAM)
-  /resume <accountId>    Start a paused bot again
+  /pause [accountId]     Stop a bot (defaults to this one). Keeps data, frees ~200MB RAM.
+  /resume <accountId>    Start a paused bot again (run from another bot)
   /rmbot <accountId>     Remove a bot and delete its data
 
 Other:
@@ -456,26 +456,17 @@ export function handleBots(ctx: CommandContext): CommandResult {
   return { reply: lines.join('\n'), handled: true };
 }
 
-/** Pause a bot (stop polling + Claude, keep account + session). */
+/**
+ * Pause a bot. With no argument, pauses the bot the command was sent to.
+ * With an accountId argument, pauses that bot instead.
+ */
 export function handlePause(ctx: CommandContext, args: string): CommandResult {
   if (!ctx.daemon) {
     return { reply: '⚠️ /pause is not available in this context.', handled: true };
   }
 
-  const targetId = args.trim();
-  if (!targetId) {
-    return {
-      reply: 'Usage: /pause <accountId>\nRun /bots to see accountIds.',
-      handled: true,
-    };
-  }
-
-  if (targetId === ctx.accountId) {
-    return {
-      reply: '⚠️ Cannot pause the bot you are currently talking to. Pause it from another bot.',
-      handled: true,
-    };
-  }
+  const targetId = args.trim() || ctx.accountId;
+  const isSelf = targetId === ctx.accountId;
 
   const daemon = ctx.daemon;
   queueMicrotask(async () => {
@@ -486,10 +477,13 @@ export function handlePause(ctx: CommandContext, args: string): CommandResult {
     }
   });
 
-  return { reply: `⏳ Pausing ${targetId}…`, handled: true };
+  const reply = isSelf
+    ? `⏳ Pausing this bot… To bring me back, send /resume ${targetId} from another bot (or restart the daemon).`
+    : `⏳ Pausing ${targetId}…`;
+  return { reply, handled: true };
 }
 
-/** Resume a paused bot. */
+/** Resume a paused bot. Always requires an accountId since the current bot is, by definition, running. */
 export function handleResume(ctx: CommandContext, args: string): CommandResult {
   if (!ctx.daemon) {
     return { reply: '⚠️ /resume is not available in this context.', handled: true };

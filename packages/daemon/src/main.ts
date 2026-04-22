@@ -362,6 +362,7 @@ class DaemonRuntime {
   /**
    * Pause a bot: stop polling + close Claude subprocess, keep the account and
    * session files. Persists paused=true so daemon restarts don't revive it.
+   * Self-pause is allowed — to resume, use another bot or restart the daemon.
    */
   async pauseBot(accountId: string, triggerInst?: BotInstance): Promise<boolean> {
     const send = triggerInst
@@ -370,10 +371,7 @@ class DaemonRuntime {
             .catch((err) => logger.warn('Failed to send pause response', { error: String(err) }))
       : async (_text: string) => {};
 
-    if (triggerInst && accountId === triggerInst.accountId) {
-      await send('⚠️ Cannot pause the bot you are currently talking to. Pause it from another bot.');
-      return false;
-    }
+    const isSelf = Boolean(triggerInst && accountId === triggerInst.accountId);
 
     if (!this.isPaused(accountId) && !this.instances.has(accountId)) {
       await send(`⚠️ Unknown bot: ${accountId}`);
@@ -381,7 +379,6 @@ class DaemonRuntime {
     }
 
     if (!this.instances.has(accountId)) {
-      // Already paused.
       await send(`ℹ️ ${accountId} is already paused.`);
       return false;
     }
@@ -392,9 +389,15 @@ class DaemonRuntime {
       return false;
     }
 
+    // Send confirmation BEFORE teardown. If this is self-pause, the bot's
+    // own channel is about to be torn down — sending afterwards would fail.
+    const confirmation = isSelf
+      ? `⏸  Paused. I'll be gone until you send /resume ${accountId} from another bot (or restart the daemon).`
+      : `⏸  Paused ${accountId}. Its account + session are kept; /resume to restart.`;
+    await send(confirmation);
+
     await this.removeBotInternal(accountId, /* deleteData */ false);
-    logger.info('Bot paused', { accountId });
-    await send(`⏸  Paused ${accountId}. Its account + session are kept; /resume to restart.`);
+    logger.info('Bot paused', { accountId, isSelf });
     return true;
   }
 
