@@ -14,6 +14,28 @@ SERVICE_NAME="claude-bridge"
 OS_TYPE="$(uname -s)"
 
 # =============================================================================
+# Shared helpers
+# =============================================================================
+
+# Print a clear "already running" message and exit 0. Called from all three
+# platform start paths so the guidance is consistent.
+print_already_running_and_exit() {
+  local detail="${1:-}"
+  echo "⚠️  claude-bridge is already running${detail:+ ($detail)}."
+  echo ""
+  echo "If you want to pick up code changes or reload config:"
+  echo "  npm run daemon -- restart"
+  echo ""
+  echo "To stop it:"
+  echo "  npm run daemon -- stop"
+  echo ""
+  echo "To check status or tail logs:"
+  echo "  npm run daemon -- status"
+  echo "  npm run daemon -- logs"
+  exit 0
+}
+
+# =============================================================================
 # macOS (launchd) functions
 # =============================================================================
 
@@ -35,8 +57,7 @@ macos_start() {
   local node_bin="$(command -v node || echo '/usr/local/bin/node')"
 
   if macos_is_loaded; then
-    echo "Already running (or plist loaded)"
-    exit 0
+    print_already_running_and_exit "launchd plist loaded"
   fi
 
   mkdir -p "$DATA_DIR/logs"
@@ -219,8 +240,7 @@ linux_direct_start() {
   if [ -f "$pid_file" ]; then
     local old_pid=$(cat "$pid_file" 2>/dev/null)
     if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
-      echo "Already running (PID: $old_pid)"
-      exit 0
+      print_already_running_and_exit "PID: $old_pid"
     fi
     rm -f "$pid_file"
   fi
@@ -294,8 +314,7 @@ linux_start() {
     local service_file="$(linux_service_file)"
 
     if systemctl --user is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-      echo "Already running"
-      exit 0
+      print_already_running_and_exit "systemd user service active"
     fi
 
     mkdir -p "$DATA_DIR/logs"
