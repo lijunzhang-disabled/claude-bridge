@@ -152,8 +152,11 @@ npm run daemon -- logs       # 查看日志
 | `/history [n]` | 查看最近 N 条对话 |
 | `/compact` | 开启新 SDK 会话 |
 | `/undo [n]` | 删除最近 N 条历史 |
-| `/bots` | **Telegram** —— 列出所有运行中的机器人 |
+| `/yolo` / `/un-yolo` | 自动批准此机器人的所有工具（危险）/ 恢复 |
+| `/bots` | **Telegram** —— 列出所有机器人（运行中 + 已暂停） |
 | `/spawn <token> <cwd>` | **Telegram** —— 热添加新机器人 |
+| `/pause [accountId]` | **Telegram** —— 暂停机器人（默认当前）；保留数据，释放 ~200MB 内存 |
+| `/resume <accountId>` | **Telegram** —— 恢复已暂停的机器人 |
 | `/rmbot <accountId>` | **Telegram** —— 停止并删除机器人 |
 | `/<skill> [参数]` | 触发已安装的 skill |
 

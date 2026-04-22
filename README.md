@@ -152,8 +152,11 @@ npm run daemon -- logs       # recent logs
 | `/history [n]` | View last N chat messages |
 | `/compact` | Start a new SDK session (clear token context) |
 | `/undo [n]` | Remove last N messages from history |
-| `/bots` | **Telegram** — list all running bots |
+| `/yolo` / `/un-yolo` | Auto-approve every tool for this bot (dangerous) / back to normal |
+| `/bots` | **Telegram** — list all bots (running + paused) |
 | `/spawn <token> <cwd>` | **Telegram** — hot-add a new bot |
+| `/pause [accountId]` | **Telegram** — pause a bot (defaults to current); keeps data, frees ~200MB RAM |
+| `/resume <accountId>` | **Telegram** — resume a paused bot |
 | `/rmbot <accountId>` | **Telegram** — stop and delete a bot |
 | `/<skill> [args]` | Trigger any installed skill |
 

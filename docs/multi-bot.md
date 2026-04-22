@@ -13,13 +13,34 @@ conversation/project. Each bot has:
 
 ---
 
+## Vocabulary
+
+**`accountId`** — each bot's unique identifier. For Telegram bots it's
+`telegram-<botId>`, where `<botId>` is the numeric ID Telegram assigned
+your bot (the one BotFather's `getMe` returns). Stable across re-runs
+of setup; used by every bot-management command.
+
+**`(you)` marker** — appears next to the bot you're currently chatting
+with in `/bots` output. Helps you tell which chat you're in and which
+bot you can't `/rmbot` yourself from.
+
+---
+
 ## Quick reference
+
+All chat commands go to a Telegram bot; all terminal commands run in the
+project directory.
 
 | Action | From terminal | From chat |
 |---|---|---|
 | Add a bot | `npm run setup -- telegram` + restart | `/spawn <token> <cwd>` (hot-load) |
-| List bots | daemon startup log / `ls accounts/` | `/bots` |
-| Remove a bot | delete JSON files + restart | `/rmbot <accountId>` |
+| List bots (running + paused) | daemon startup log / `ls accounts/` | `/bots` |
+| Reset a bot's Claude conversation | — | `/clear` (in that bot) |
+| Pause a bot (keep data, free RAM) | edit JSON `paused: true` + restart | `/pause` (in it) or `/pause <accountId>` (in another) |
+| Resume a paused bot | edit JSON `paused: false` + restart | `/resume <accountId>` |
+| Remove a bot (delete data) | delete JSON files + restart | `/rmbot <accountId>` (from another bot) |
+| Auto-approve all tools | — | `/yolo` (in that bot) |
+| Exit auto-approve | — | `/un-yolo` (in that bot) |
 | Change working dir | re-run setup with same token + restart | *(re-run `/spawn`)* |
 
 Both the terminal and chat paths write to the same account files, so
@@ -150,16 +171,22 @@ npm run daemon -- logs
 
 ### From chat
 
-Send `/bots` to any running bot. It lists every bot the daemon is
-currently running, with its accountId and working directory. Your own
-bot is marked `(you)`.
+Send `/bots` to any running bot. It lists every bot the daemon knows
+about — both running and paused — with its accountId, Telegram
+username, and working directory. Your own bot is marked `(you)`.
 
 ```
-Running bots:
+Bots:
 
-  telegram-8569776287 (you)  @bot1  /path/to/project1
-  telegram-9999999999        @bot2  /path/to/project2
+  ▶️  telegram-8569776287 (you)  @bot1  /path/to/project1
+  ▶️  telegram-9999999999        @bot2  /path/to/project2
+  ⏸   telegram-1234567890        @bot3  /path/to/project3
+
+▶️ = running, ⏸ = paused (use /resume <accountId> to restart)
 ```
+
+The `telegram-<number>` part is the accountId. You'll paste it into
+`/pause`, `/resume`, or `/rmbot` commands.
 
 ---
 
@@ -190,6 +217,57 @@ npm run daemon -- restart
 > The in-chat `/cwd` command only updates the **session** working
 > directory. It does not persist to the account file and is reset on
 > daemon restart. Use one of the options above for a permanent change.
+
+---
+
+## Pausing and resuming a bot
+
+Sometimes you want to stop a bot temporarily without losing its setup —
+for example, to free up ~200 MB of RAM when you're not actively using
+it. Pausing keeps the account file and the session history; only the
+Claude Code subprocess and the Telegram poll are stopped.
+
+### Pause
+
+- **From the bot itself** (shortcut):
+  ```
+  /pause
+  ```
+  The bot replies, then goes offline. To bring it back, see *Resume* below.
+
+- **From another bot:**
+  ```
+  /pause telegram-<botId>
+  ```
+  The current bot confirms: `⏸ Paused telegram-<id>. ...`
+
+A paused bot is marked with `⏸` in `/bots` output and survives daemon
+restarts — it won't come back on its own.
+
+### Resume
+
+From any **running** bot:
+```
+/resume telegram-<botId>
+```
+
+The daemon clears the paused flag, starts a fresh Claude Code subprocess
+for that bot, and resumes Telegram polling. Chat history, `/yolo` state,
+and auto-approved tools are all preserved.
+
+> You can't resume a bot from itself (it isn't polling), so use another
+> running bot — or restart the daemon (`npm run daemon -- restart`),
+> which will bring back all non-paused bots and leave paused ones
+> paused.
+
+### Pause vs. Clear vs. Remove
+
+| Command | Claude subprocess | Chat history | Account file |
+|---|---|---|---|
+| `/clear` | restarted (fresh context) | cleared | kept |
+| `/pause` | stopped | kept | kept (+ `paused: true`) |
+| `/resume` | started | restored from kept file | `paused: false` |
+| `/rmbot` | stopped | deleted | deleted |
 
 ---
 
