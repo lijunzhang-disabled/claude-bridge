@@ -555,8 +555,9 @@ async function runSetup(channelName: string): Promise<void> {
     console.log('');
     console.log('      npm run daemon -- restart');
     console.log('');
-    console.log('    (Tip: next time, you can hot-add a bot from chat with /spawn');
-    console.log('     and skip the restart entirely.)');
+    console.log('    (Tip: `npm run daemon -- start` also works — it auto-detects the');
+    console.log('     running daemon and restarts it. Or hot-add from chat with /spawn');
+    console.log('     to skip the restart entirely.)');
   } else {
     console.log('Start the daemon:');
     console.log('');

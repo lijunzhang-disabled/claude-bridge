@@ -17,22 +17,16 @@ OS_TYPE="$(uname -s)"
 # Shared helpers
 # =============================================================================
 
-# Print a clear "already running" message and exit 0. Called from all three
-# platform start paths so the guidance is consistent.
-print_already_running_and_exit() {
+# Print a clear "already running, restarting now" notice. Called from all
+# three platform start paths so the guidance is consistent. Each caller is
+# expected to stop+start after this notice (so new bot accounts get loaded).
+print_already_running_notice() {
   local detail="${1:-}"
   echo "⚠️  claude-bridge is already running${detail:+ ($detail)}."
+  echo "   Restarting now to pick up any new bot accounts or config changes..."
   echo ""
-  echo "If you want to pick up code changes or reload config:"
-  echo "  npm run daemon -- restart"
-  echo ""
-  echo "To stop it:"
-  echo "  npm run daemon -- stop"
-  echo ""
-  echo "To check status or tail logs:"
-  echo "  npm run daemon -- status"
-  echo "  npm run daemon -- logs"
-  exit 0
+  echo "   (To stop instead: npm run daemon -- stop)"
+  echo "   (To check status / tail logs: npm run daemon -- status | logs)"
 }
 
 # =============================================================================
@@ -57,7 +51,9 @@ macos_start() {
   local node_bin="$(command -v node || echo '/usr/local/bin/node')"
 
   if macos_is_loaded; then
-    print_already_running_and_exit "launchd plist loaded"
+    print_already_running_notice "launchd plist loaded"
+    macos_stop
+    sleep 1
   fi
 
   mkdir -p "$DATA_DIR/logs"
@@ -240,9 +236,12 @@ linux_direct_start() {
   if [ -f "$pid_file" ]; then
     local old_pid=$(cat "$pid_file" 2>/dev/null)
     if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
-      print_already_running_and_exit "PID: $old_pid"
+      print_already_running_notice "PID: $old_pid"
+      linux_direct_stop
+      sleep 1
+    else
+      rm -f "$pid_file"
     fi
-    rm -f "$pid_file"
   fi
 
   mkdir -p "$DATA_DIR/logs"
@@ -262,14 +261,14 @@ linux_direct_stop() {
 
   if [ ! -f "$pid_file" ]; then
     echo "Not running (no PID file)"
-    exit 0
+    return 0
   fi
 
   local pid=$(cat "$pid_file" 2>/dev/null)
   if [ -z "$pid" ]; then
     rm -f "$pid_file"
     echo "Stopped"
-    exit 0
+    return 0
   fi
 
   if kill -0 "$pid" 2>/dev/null; then
@@ -293,13 +292,13 @@ linux_direct_status() {
 
   if [ ! -f "$pid_file" ]; then
     echo "Not running"
-    exit 0
+    return 0
   fi
 
   local pid=$(cat "$pid_file" 2>/dev/null)
   if [ -z "$pid" ]; then
     echo "Not running (invalid PID file)"
-    exit 0
+    return 0
   fi
 
   if kill -0 "$pid" 2>/dev/null; then
@@ -312,18 +311,24 @@ linux_direct_status() {
 linux_start() {
   if linux_systemd_available; then
     local service_file="$(linux_service_file)"
-
+    local was_active=0
     if systemctl --user is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-      print_already_running_and_exit "systemd user service active"
+      print_already_running_notice "systemd user service active"
+      was_active=1
     fi
 
     mkdir -p "$DATA_DIR/logs"
     linux_create_service_file
     linux_reload_daemon
 
-    systemctl --user start "${SERVICE_NAME}"
-    systemctl --user enable "${SERVICE_NAME}" 2>/dev/null || true
-    echo "Started claude-bridge daemon (Linux systemd)"
+    if [ "$was_active" = "1" ]; then
+      systemctl --user restart "${SERVICE_NAME}"
+      echo "Restarted claude-bridge daemon (Linux systemd)"
+    else
+      systemctl --user start "${SERVICE_NAME}"
+      systemctl --user enable "${SERVICE_NAME}" 2>/dev/null || true
+      echo "Started claude-bridge daemon (Linux systemd)"
+    fi
   else
     echo "Note: systemd user session not available, using direct mode"
     echo "To enable systemd mode, run: 'loginctl enable-linger $(whoami)'"
