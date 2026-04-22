@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline';
 import process from 'node:process';
 import { mkdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 import {
   createSessionStore,
@@ -515,6 +516,24 @@ class DaemonRuntime {
 // Setup
 // ---------------------------------------------------------------------------
 
+/**
+ * Detect whether a daemon process is already running on this host. Used to
+ * decide whether to tell the user to `start` or `restart` after setup.
+ * Uses pgrep; falls back to false if pgrep is unavailable or excluded by PATH.
+ */
+function isDaemonRunning(): boolean {
+  try {
+    // -f matches the full command line; exclude the current process (setup)
+    // by matching only 'main.js start'.
+    const result = spawnSync('pgrep', ['-f', 'packages/daemon/dist/main.js start'], {
+      stdio: 'pipe',
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
 async function runSetup(channelName: string): Promise<void> {
   mkdirSync(DATA_DIR, { recursive: true });
 
@@ -527,7 +546,22 @@ async function runSetup(channelName: string): Promise<void> {
   config.channel = channelName;
   saveConfig(config);
 
-  console.log('Setup complete. Run: npm run daemon -- start');
+  console.log('');
+  console.log('Setup complete.');
+  if (isDaemonRunning()) {
+    console.log('');
+    console.log('⚠️  The daemon is already running — it will not pick up this new bot');
+    console.log('    until you restart it:');
+    console.log('');
+    console.log('      npm run daemon -- restart');
+    console.log('');
+    console.log('    (Tip: next time, you can hot-add a bot from chat with /spawn');
+    console.log('     and skip the restart entirely.)');
+  } else {
+    console.log('Start the daemon:');
+    console.log('');
+    console.log('  npm run daemon -- start');
+  }
 }
 
 // ---------------------------------------------------------------------------
