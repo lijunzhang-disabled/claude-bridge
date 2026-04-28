@@ -1,0 +1,27 @@
+{
+  "name": "@claude-bridge/channel-lark",
+  "version": "1.0.0",
+  "description": "Lark/Feishu channel adapter (Open Platform via long-connection WebSocket)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@claude-bridge/core": "*",
+    "@larksuiteoapi/node-sdk": "^1.40.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

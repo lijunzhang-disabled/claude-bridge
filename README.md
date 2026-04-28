@@ -2,17 +2,17 @@
 
 **English** | [中文](README_zh.md)
 
-Bridge chat platforms to your local [Claude Code](https://claude.ai/claude-code). Chat with Claude from your phone — text, images, permission approvals, slash commands — via **Telegram** today, with WeChat also supported.
+Bridge chat platforms to your local [Claude Code](https://claude.ai/claude-code). Chat with Claude from your phone — text, images, permission approvals, slash commands — via **Telegram**, **Feishu (飞书)**, or **WeChat**.
 
-📖 **Running multiple bots?** See **[docs/multi-bot.md](docs/multi-bot.md)** — add, list, change, and remove bots (with hot-add from chat via `/spawn`). *Telegram only* — WeChat is limited to one account per daemon.
+📖 **Running multiple bots?** See **[docs/multi-bot.md](docs/multi-bot.md)** — add, list, change, and remove bots. Telegram supports hot-add from chat (`/spawn`); Feishu supports multi-bot via setup + restart; WeChat is one account per daemon.
 
 > **Attribution.** This project started as a fork of [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code). It has since been restructured into a monorepo with a channel-adapter architecture, migrated to the persistent-session pattern (one long-running Claude process instead of one per message), hardened against production issues (protocol headers, IDC redirect, WAF sanitization, session recovery, "always allow" permissions), and extended to support Telegram with multi-bot and hot-add via chat. See `git log` for the full list of changes.
 
 ## Features
 
-- **Channel-adapter architecture** — Telegram and WeChat today, Discord/Slack/... trivially added by implementing the `Channel` interface
-- **Multi-bot (Telegram)** — one daemon runs many bots concurrently, each with its own project directory and isolated Claude session
-- **Hot-add bots from chat** — `/spawn <token> <cwd>` registers a new bot without restarting anything
+- **Channel-adapter architecture** — Telegram, Feishu, and WeChat today; Discord/Slack/... trivially added by implementing the `Channel` interface
+- **Multi-bot (Telegram + Feishu)** — one daemon runs many bots concurrently, each with its own project directory and isolated Claude session
+- **Hot-add bots from chat (Telegram)** — `/spawn <token> <cwd>` registers a new bot without restarting anything
 - **Persistent Claude sessions** — one long-running Claude Code process per bot, context stays in memory across messages
 - **Real-time progress updates** — see Claude's tool calls (🔧 Bash, 📖 Read, 🔍 Glob…) as they happen
 - **Thinking preview** — get a 💭 preview of Claude's reasoning before each tool call
@@ -45,6 +45,7 @@ git clone https://github.com/lijunzhang-disabled/claude-bridge.git /opt/claude-b
 ### Channel-specific prerequisites
 
 - **Telegram** (recommended): a bot token from [@BotFather](https://t.me/BotFather). Creating a bot is free and takes under a minute.
+- **Feishu (飞书)**: a custom app from the [Feishu Open Platform](https://open.feishu.cn/app) with the bot capability enabled, long-connection (长连接) mode selected, and the `im.message.receive_v1` event subscribed. See the Feishu quick-start below for the full console walkthrough.
 - **WeChat**: personal WeChat account. Update WeChat to the latest version and enable the ClawBot plugin in Settings → WeChat Plus (插件) before scanning.
 
 ## Installation
@@ -113,6 +114,54 @@ Either run `npm run setup -- telegram` again (then `npm run daemon -- restart`),
 
 The new bot is live immediately — no daemon restart. Full details in [docs/multi-bot.md](docs/multi-bot.md).
 
+## Quick Start — Feishu (飞书)
+
+Feishu uses an outbound long-connection (WebSocket) to receive events, so no public URL or webhook setup is required — it works behind NAT just like Telegram.
+
+### 1. Create a custom app on the Feishu Open Platform
+
+Open [open.feishu.cn/app](https://open.feishu.cn/app) → 创建企业自建应用. Then, in the app's console:
+
+1. **应用能力 (App Features)** → enable **机器人 (Bot)**. Without this, the message-receive permission cannot be added.
+2. **事件与回调 (Events & Callbacks) → 事件配置** → switch 推送方式 (Push Method) to **长连接 (Long Connection)**.
+3. On the same page, **添加事件 (Add Event)** → search and add **接收消息 v2.0** (`im.message.receive_v1`).
+4. **权限管理 (Permissions)** → enable these scopes:
+   - `im:message:receive_v1` (Get direct messages sent to bot)
+   - `im:message:send_as_bot` (Send messages as the application)
+   - `im:resource` (Read message resource — needed for image attachments)
+5. **版本管理与发布** → 创建版本 → submit for tenant-admin approval, then **publish** the released version.
+6. **凭证与基础信息 (Credentials)** → copy the **App ID** (looks like `cli_xxx`) and **App Secret**.
+
+### 2. Setup
+
+```bash
+npm run setup -- lark
+```
+
+Setup prompts for three things:
+
+- **App ID** — from step 6 above
+- **App Secret** — from step 6 above
+- **Working directory** — the project path this bot operates on
+
+Setup validates the credentials by acquiring a `tenant_access_token`, then persists them to `~/.claude-bridge/accounts/lark-<appId>.json`.
+
+### 3. Start the daemon
+
+```bash
+npm run daemon -- start
+```
+
+### 4. Claim ownership and chat
+
+Open Feishu, search for your bot by its display name, and **send the first message yourself**. The first inbound message claims you as the owner — the daemon writes your `open_id` into the account file and ignores everyone else thereafter.
+
+> If the bot doesn't appear in Feishu search, double-check that the app version is **已发布 (Released)** under 版本管理与发布, not just approved, and that your account is within the app's 可用范围 (Availability) under 应用功能 → 机器人.
+
+### Add more Feishu bots
+
+Repeat steps 1-2 for a separate custom app, then `npm run daemon -- restart`. Hot-add via `/spawn` is Telegram-only (it relies on a bot-token-only registration flow that doesn't fit Feishu's app model). All other multi-bot commands (`/bots`, `/pause`, `/resume`, `/rmbot`) work the same. See [docs/multi-bot.md](docs/multi-bot.md).
+
 ## Quick Start — WeChat (alternative)
 
 ```bash
@@ -153,11 +202,11 @@ npm run daemon -- logs       # recent logs
 | `/compact` | Start a new SDK session (clear token context) |
 | `/undo [n]` | Remove last N messages from history |
 | `/yolo` / `/un-yolo` | Auto-approve every tool for this bot (dangerous) / back to normal |
-| `/bots` | **Telegram** — list all bots (running + paused) |
-| `/spawn <token> <cwd>` | **Telegram** — hot-add a new bot |
-| `/pause [accountId]` | **Telegram** — pause a bot (defaults to current); keeps data, frees ~200MB RAM |
-| `/resume <accountId>` | **Telegram** — resume a paused bot |
-| `/rmbot <accountId>` | **Telegram** — stop and delete a bot |
+| `/bots` | **Telegram + Feishu** — list all bots (running + paused) |
+| `/spawn <token> <cwd>` | **Telegram only** — hot-add a new bot |
+| `/pause [accountId]` | **Telegram + Feishu** — pause a bot (defaults to current); keeps data, frees ~200MB RAM |
+| `/resume <accountId>` | **Telegram + Feishu** — resume a paused bot |
+| `/rmbot <accountId>` | **Telegram + Feishu** — stop and delete a bot |
 | `/<skill> [args]` | Trigger any installed skill |
 
 ## Permission Approval
@@ -183,8 +232,9 @@ Switch permission mode with `/permission <mode>`:
 ```
 Chat platform  ←→  Channel adapter  ←→  Daemon  ←→  PersistentSession  ←→  Claude Code
   (Telegram /          (implements          (orchestration,     (one long-running
-   WeChat /             Channel              permissions,        claude process per
-   Discord)             interface)           multi-bot runtime)  bot, context in RAM)
+   Feishu /             Channel              permissions,        claude process per
+   WeChat /             interface)           multi-bot runtime)  bot, context in RAM)
+   Discord)
 ```
 
 - The daemon polls each configured channel for inbound messages
@@ -207,7 +257,7 @@ export interface Channel {
 }
 ```
 
-Reference implementations: `packages/channel-telegram/src/telegram-channel.ts`, `packages/channel-wechat/src/wechat-channel.ts`.
+Reference implementations: `packages/channel-telegram/src/telegram-channel.ts`, `packages/channel-lark/src/lark-channel.ts`, `packages/channel-wechat/src/wechat-channel.ts`.
 
 ## Repository layout
 
@@ -217,6 +267,7 @@ claude-bridge/
 │   ├── core/                 # PersistentSession, permission broker, Channel interface
 │   ├── channel-wechat/       # WeChat adapter (iLink bot API)
 │   ├── channel-telegram/     # Telegram adapter (grammy)
+│   ├── channel-lark/         # Feishu/Lark adapter (open-platform WebSocket)
 │   └── daemon/               # orchestrator — DaemonRuntime, message loop
 ├── docs/
 │   └── multi-bot.md          # multi-bot guide

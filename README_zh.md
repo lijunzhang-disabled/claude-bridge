@@ -2,17 +2,17 @@
 
 [English](README.md) | **中文**
 
-将聊天平台桥接到本地 [Claude Code](https://claude.ai/claude-code)。在手机上通过 **Telegram** 或微信与 Claude 对话——文字、图片、权限审批、斜杠命令全部支持。
+将聊天平台桥接到本地 [Claude Code](https://claude.ai/claude-code)。在手机上通过 **Telegram**、**飞书**或**微信**与 Claude 对话——文字、图片、权限审批、斜杠命令全部支持。
 
-📖 **运行多个机器人？** 请看 **[docs/multi-bot.md](docs/multi-bot.md)** —— 添加、列出、修改、删除机器人（含聊天中 `/spawn` 热添加）。*仅支持 Telegram* —— 微信当前限制为每个 daemon 一个账号。
+📖 **运行多个机器人？** 请看 **[docs/multi-bot.md](docs/multi-bot.md)** —— 添加、列出、修改、删除机器人。Telegram 支持聊天中 `/spawn` 热添加；飞书支持多机器人但需通过 setup + 重启;微信当前限制为每个 daemon 一个账号。
 
 > **致谢。** 本项目源自 [Wechat-ggGitHub/wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code) 的 fork，之后进行了较大改动：重构为 monorepo + channel 适配器架构；迁移到 persistent session 模型；修复了多个生产问题（协议头、IDC 重定向、WAF 清洗、会话恢复、"始终允许"权限等）；扩展支持 Telegram 及多机器人 + 聊天热添加。完整改动见 `git log`。
 
 ## 功能特性
 
-- **Channel 适配器架构** —— 当前支持 Telegram + 微信，添加 Discord/Slack/... 只需实现 `Channel` 接口
-- **多机器人（Telegram）** —— 一个 daemon 同时运行多个机器人，各自独立的工作目录与 Claude 会话
-- **聊天热添加** —— 在已有机器人中发送 `/spawn <token> <cwd>` 即可注册新机器人，无需重启
+- **Channel 适配器架构** —— 当前支持 Telegram、飞书、微信，添加 Discord/Slack/... 只需实现 `Channel` 接口
+- **多机器人（Telegram + 飞书）** —— 一个 daemon 同时运行多个机器人，各自独立的工作目录与 Claude 会话
+- **聊天热添加（Telegram）** —— 在已有机器人中发送 `/spawn <token> <cwd>` 即可注册新机器人，无需重启
 - **持久化 Claude 会话** —— 每个机器人一个长期运行的 Claude Code 进程，上下文在内存中保留
 - **实时进度推送** —— 实时查看 Claude 的工具调用（🔧 Bash、📖 Read、🔍 Glob…）
 - **思考预览** —— 每次工具调用前展示 💭 Claude 的推理摘要
@@ -45,7 +45,8 @@ git clone https://github.com/lijunzhang-disabled/claude-bridge.git /opt/claude-b
 ### 各 channel 的前置条件
 
 - **Telegram**（推荐）：来自 [@BotFather](https://t.me/BotFather) 的机器人 token。创建机器人免费且耗时不到一分钟。
-- **微信**：个人微信账号。请先将微信更新到最新版本，并在 设置 → 插件 中启用 ClawBot（龙虾）插件。
+- **飞书**：在[飞书开放平台](https://open.feishu.cn/app)创建一个企业自建应用,启用机器人能力,选择"长连接"事件推送方式,并订阅 `im.message.receive_v1` 事件。详见下方"飞书快速开始"章节。
+- **微信**：个人微信账号。请先将微信更新到最新版本,并在 设置 → 插件 中启用 ClawBot(龙虾)插件。
 
 ## 安装
 
@@ -113,6 +114,54 @@ npm run daemon -- start
 
 新机器人立即可用 —— 无需重启 daemon。详见 [docs/multi-bot.md](docs/multi-bot.md)。
 
+## 快速开始 —— 飞书
+
+飞书使用出站长连接(WebSocket)接收事件,无需公网 URL 或 webhook 配置 —— 跟 Telegram 一样可在 NAT 后面运行。
+
+### 1. 在飞书开放平台创建企业自建应用
+
+打开 [open.feishu.cn/app](https://open.feishu.cn/app) → 创建企业自建应用。然后在应用控制台:
+
+1. **应用能力** → 启用 **机器人**。不开通这一项,后面的接收消息权限无法添加。
+2. **事件与回调 → 事件配置** → 将"推送方式"切换为 **长连接**。
+3. 同一页面 → **添加事件** → 搜索并添加 **接收消息 v2.0**(`im.message.receive_v1`)。
+4. **权限管理** → 启用以下权限:
+   - `im:message:receive_v1` (获取用户发给机器人的单聊消息)
+   - `im:message:send_as_bot` (以应用的身份发消息)
+   - `im:resource` (获取消息中的资源 —— 图片附件需要)
+5. **版本管理与发布** → 创建版本 → 提交租户管理员审核,然后**发布**已通过的版本。
+6. **凭证与基础信息** → 复制 **App ID**(形如 `cli_xxx`)和 **App Secret**。
+
+### 2. 设置
+
+```bash
+npm run setup -- lark
+```
+
+setup 会依次询问:
+
+- **App ID** —— 步骤 6 中复制的
+- **App Secret** —— 步骤 6 中复制的
+- **工作目录** —— 该机器人对应的项目路径
+
+setup 会通过获取 `tenant_access_token` 验证凭证,然后保存到 `~/.claude-bridge/accounts/lark-<appId>.json`。
+
+### 3. 启动 daemon
+
+```bash
+npm run daemon -- start
+```
+
+### 4. 认领所有权并开始聊天
+
+打开飞书,按机器人显示名搜索,然后**自己先发第一条消息**。第一条入站消息会把发送者认领为所有者 —— daemon 把你的 `open_id` 写入账号文件,从此忽略其他人的消息。
+
+> 如果搜不到机器人,请检查"版本管理与发布"中应用版本是否处于**已发布**状态(只是审核通过还不够),以及你的账号是否在"应用功能 → 机器人"的"可用范围"内。
+
+### 添加更多飞书机器人
+
+为另一个企业自建应用重复步骤 1-2,然后 `npm run daemon -- restart`。聊天中 `/spawn` 热添加仅支持 Telegram(它依赖 token-only 的注册流程,不适用于飞书的应用模型)。其他多机器人命令(`/bots`、`/pause`、`/resume`、`/rmbot`)用法相同。详见 [docs/multi-bot.md](docs/multi-bot.md)。
+
 ## 快速开始 —— 微信（替代方案）
 
 ```bash
@@ -153,11 +202,11 @@ npm run daemon -- logs       # 查看日志
 | `/compact` | 开启新 SDK 会话 |
 | `/undo [n]` | 删除最近 N 条历史 |
 | `/yolo` / `/un-yolo` | 自动批准此机器人的所有工具（危险）/ 恢复 |
-| `/bots` | **Telegram** —— 列出所有机器人（运行中 + 已暂停） |
-| `/spawn <token> <cwd>` | **Telegram** —— 热添加新机器人 |
-| `/pause [accountId]` | **Telegram** —— 暂停机器人（默认当前）；保留数据，释放 ~200MB 内存 |
-| `/resume <accountId>` | **Telegram** —— 恢复已暂停的机器人 |
-| `/rmbot <accountId>` | **Telegram** —— 停止并删除机器人 |
+| `/bots` | **Telegram + 飞书** —— 列出所有机器人(运行中 + 已暂停) |
+| `/spawn <token> <cwd>` | **仅 Telegram** —— 热添加新机器人 |
+| `/pause [accountId]` | **Telegram + 飞书** —— 暂停机器人(默认当前);保留数据,释放 ~200MB 内存 |
+| `/resume <accountId>` | **Telegram + 飞书** —— 恢复已暂停的机器人 |
+| `/rmbot <accountId>` | **Telegram + 飞书** —— 停止并删除机器人 |
 | `/<skill> [参数]` | 触发已安装的 skill |
 
 ## 权限审批
@@ -183,8 +232,9 @@ Claude 请求执行工具时，你会收到权限请求：
 ```
 聊天平台  ←→  Channel 适配器  ←→  Daemon  ←→  PersistentSession  ←→  Claude Code
 (Telegram /        (实现 Channel         (编排、权限、         (每个机器人一个
- 微信 /             接口)                 多机器人运行时)      长期运行的 claude
- Discord)                                                      进程，上下文在内存)
+ 飞书 /             接口)                 多机器人运行时)      长期运行的 claude
+ 微信 /                                                          进程，上下文在内存)
+ Discord)
 ```
 
 - Daemon 从配置的 channel 拉取入站消息
@@ -196,6 +246,7 @@ Claude 请求执行工具时，你会收到权限请求：
 
 实现 `@claude-bridge/core` 中的 `Channel` 接口。参考实现：
 `packages/channel-telegram/src/telegram-channel.ts`、
+`packages/channel-lark/src/lark-channel.ts`、
 `packages/channel-wechat/src/wechat-channel.ts`。
 
 ## 仓库结构
@@ -206,6 +257,7 @@ claude-bridge/
 │   ├── core/                 # PersistentSession、权限 broker、Channel 接口
 │   ├── channel-wechat/       # 微信适配器（iLink bot API）
 │   ├── channel-telegram/     # Telegram 适配器（grammy）
+│   ├── channel-lark/         # 飞书/Lark 适配器（开放平台 WebSocket）
 │   └── daemon/               # 编排层 —— DaemonRuntime、消息循环
 ├── docs/
 │   └── multi-bot.md          # 多机器人使用指南

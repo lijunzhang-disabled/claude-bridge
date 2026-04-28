@@ -31,6 +31,13 @@ import {
   saveTelegramAccount,
   registerTelegramAccount,
 } from '@claude-bridge/channel-telegram';
+import {
+  LarkChannel,
+  listLarkAccountIds,
+  deleteLarkAccount,
+  loadLarkAccount,
+  saveLarkAccount,
+} from '@claude-bridge/channel-lark';
 
 // ---------------------------------------------------------------------------
 // Channel selection
@@ -42,8 +49,11 @@ function createChannel(name: string, accountId?: string): Channel {
       return new WeChatChannel();
     case 'telegram':
       return new TelegramChannel(accountId);
+    case 'lark':
+    case 'feishu':
+      return new LarkChannel(accountId);
     default:
-      throw new Error(`Unknown channel: ${name}. Supported: wechat, telegram`);
+      throw new Error(`Unknown channel: ${name}. Supported: wechat, telegram, lark`);
   }
 }
 
@@ -72,6 +82,9 @@ function listAccountIdsForChannel(name: string): string[] {
   switch (name) {
     case 'telegram':
       return listTelegramAccountIds();
+    case 'lark':
+    case 'feishu':
+      return listLarkAccountIds();
     case 'wechat': {
       const probe = new WeChatChannel();
       const acc = probe.loadAccount();
@@ -244,6 +257,10 @@ class DaemonRuntime {
       const data = loadTelegramAccount(accountId);
       if (data) return `@${data.botUsername || accountId}  ${cwd}`;
     }
+    if ((this.channelName === 'lark' || this.channelName === 'feishu') && accountId.startsWith('lark-')) {
+      const data = loadLarkAccount(accountId);
+      if (data) return `${data.botName || data.appId}  ${cwd}`;
+    }
     return `${accountId}  ${cwd}`;
   }
 
@@ -261,21 +278,34 @@ class DaemonRuntime {
     };
   }
 
-  /** Return true if a telegram account is marked paused. */
+  /** Return true if an account is marked paused (telegram or lark). */
   private isPaused(accountId: string): boolean {
-    if (!accountId.startsWith('telegram-')) return false;
-    const data = loadTelegramAccount(accountId);
-    return Boolean(data?.paused);
+    if (accountId.startsWith('telegram-')) {
+      return Boolean(loadTelegramAccount(accountId)?.paused);
+    }
+    if (accountId.startsWith('lark-')) {
+      return Boolean(loadLarkAccount(accountId)?.paused);
+    }
+    return false;
   }
 
-  /** Persist the paused flag on a telegram account file. */
+  /** Persist the paused flag on a telegram or lark account file. */
   private setPausedFlag(accountId: string, paused: boolean): boolean {
-    if (!accountId.startsWith('telegram-')) return false;
-    const data = loadTelegramAccount(accountId);
-    if (!data) return false;
-    data.paused = paused;
-    saveTelegramAccount(data);
-    return true;
+    if (accountId.startsWith('telegram-')) {
+      const data = loadTelegramAccount(accountId);
+      if (!data) return false;
+      data.paused = paused;
+      saveTelegramAccount(data);
+      return true;
+    }
+    if (accountId.startsWith('lark-')) {
+      const data = loadLarkAccount(accountId);
+      if (!data) return false;
+      data.paused = paused;
+      saveLarkAccount(data);
+      return true;
+    }
+    return false;
   }
 
   async bootstrap(accountIds: string[]): Promise<void> {
@@ -418,7 +448,10 @@ class DaemonRuntime {
       return false;
     }
 
-    if (!accountId.startsWith('telegram-') || !loadTelegramAccount(accountId)) {
+    const knownAccount =
+      (accountId.startsWith('telegram-') && loadTelegramAccount(accountId)) ||
+      (accountId.startsWith('lark-') && loadLarkAccount(accountId));
+    if (!knownAccount) {
       await send(`⚠️ Unknown bot: ${accountId}`);
       return false;
     }
@@ -469,6 +502,8 @@ class DaemonRuntime {
     if (deleteData) {
       if (accountId.startsWith('telegram-')) {
         deleteTelegramAccount(accountId);
+      } else if (accountId.startsWith('lark-')) {
+        deleteLarkAccount(accountId);
       }
       this.sessionStore.remove(accountId);
     }
@@ -491,6 +526,16 @@ class DaemonRuntime {
         const data = loadTelegramAccount(id);
         const label = data
           ? `@${data.botUsername || id}  ${data.workingDirectory}`
+          : id;
+        paused.push({ accountId: id, label, status: 'paused' });
+      }
+    } else if (this.channelName === 'lark' || this.channelName === 'feishu') {
+      for (const id of listLarkAccountIds()) {
+        if (this.instances.has(id)) continue;
+        if (!this.isPaused(id)) continue;
+        const data = loadLarkAccount(id);
+        const label = data
+          ? `${data.botName || data.appId}  ${data.workingDirectory}`
           : id;
         paused.push({ accountId: id, label, status: 'paused' });
       }

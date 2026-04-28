@@ -4,6 +4,7 @@
     { "path": "packages/core" },
     { "path": "packages/channel-wechat" },
     { "path": "packages/channel-telegram" },
+    { "path": "packages/channel-lark" },
     { "path": "packages/daemon" }
   ]
 }

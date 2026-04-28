@@ -1,6 +1,6 @@
-# Managing multiple Telegram bots
+# Managing multiple bots
 
-The daemon can run multiple Telegram bots simultaneously — one per
+The daemon can run multiple bots simultaneously — one per
 conversation/project. Each bot has:
 
 - its own working directory
@@ -8,17 +8,31 @@ conversation/project. Each bot has:
 - its own permission state (auto-approved tools, `/clear` scope)
 - its own session history
 
+Multi-bot is supported on **Telegram** and **Feishu**. The two differ in
+how new bots get added:
+
+- **Telegram** — full multi-bot, including hot-add from chat (`/spawn
+  <token> <cwd>`). Adding a bot is one chat message, no daemon restart.
+- **Feishu (飞书)** — multi-bot via terminal setup + daemon restart. Hot-add
+  from chat is **not supported** because Feishu requires a per-app
+  configuration in the Open Platform console (event subscription, scopes,
+  version approval) that can't be automated from a chat command. All
+  other commands (`/bots`, `/pause`, `/resume`, `/rmbot`) work the same.
+
 > **WeChat note.** WeChat currently supports one account per daemon (one
-> QR scan = one account). Multi-bot is a Telegram-only feature today.
+> QR scan = one account). Multi-bot is not available for WeChat.
 
 ---
 
 ## Vocabulary
 
-**`accountId`** — each bot's unique identifier. For Telegram bots it's
-`telegram-<botId>`, where `<botId>` is the numeric ID Telegram assigned
-your bot (the one BotFather's `getMe` returns). Stable across re-runs
-of setup; used by every bot-management command.
+**`accountId`** — each bot's unique identifier. Stable across re-runs of
+setup; used by every bot-management command.
+
+- **Telegram bots:** `telegram-<botId>`, where `<botId>` is the numeric
+  ID Telegram assigned your bot (the one BotFather's `getMe` returns).
+- **Feishu bots:** `lark-<appId>` (with non-alphanumeric characters in
+  the appId replaced by `_`), e.g. `lark-cli_a1b2c3d4`.
 
 **`(you)` marker** — appears next to the bot you're currently chatting
 with in `/bots` output. Helps you tell which chat you're in and which
@@ -28,12 +42,13 @@ bot you can't `/rmbot` yourself from.
 
 ## Quick reference
 
-All chat commands go to a Telegram bot; all terminal commands run in the
-project directory.
+All chat commands run inside one of your bots; all terminal commands run
+in the project directory.
 
 | Action | From terminal | From chat |
 |---|---|---|
-| Add a bot | `npm run setup -- telegram` + restart | `/spawn <token> <cwd>` (hot-load) |
+| Add a Telegram bot | `npm run setup -- telegram` + restart | `/spawn <token> <cwd>` (hot-load, Telegram only) |
+| Add a Feishu bot | `npm run setup -- lark` + restart | *(not available)* |
 | List bots (running + paused) | daemon startup log / `ls accounts/` | `/bots` |
 | Reset a bot's Claude conversation | — | `/clear` (in that bot) |
 | Pause a bot (keep data, free RAM) | edit JSON `paused: true` + restart | `/pause` (in it) or `/pause <accountId>` (in another) |
@@ -41,7 +56,7 @@ project directory.
 | Remove a bot (delete data) | delete JSON files + restart | `/rmbot <accountId>` (from another bot) |
 | Auto-approve all tools | — | `/yolo` (in that bot) |
 | Exit auto-approve | — | `/un-yolo` (in that bot) |
-| Change working dir | re-run setup with same token + restart | *(re-run `/spawn`)* |
+| Change working dir | re-run setup + restart | *(Telegram only: re-run `/spawn`)* |
 
 Both the terminal and chat paths write to the same account files, so
 they compose freely.
@@ -154,14 +169,72 @@ working directory. Other bots keep using theirs.
 
 ---
 
+### Option C: Adding a Feishu bot
+
+Feishu doesn't support `/spawn` (see the note at the top of this doc).
+The flow is always: configure a custom app on the Open Platform, then
+run setup, then restart the daemon.
+
+#### 1. Create the custom app
+
+In the [Feishu Open Platform](https://open.feishu.cn/app), create a new
+企业自建应用 and:
+
+- 应用能力 → enable 机器人
+- 事件与回调 → set 推送方式 to 长连接 → add event `im.message.receive_v1`
+- 权限管理 → enable `im:message:receive_v1`, `im:message:send_as_bot`,
+  `im:resource`
+- 版本管理与发布 → 创建版本 → submit and publish (admin approval)
+
+The full step-by-step is in the [main README's Feishu quick-start](../README.md#quick-start--feishu-飞书).
+
+#### 2. Run setup
+
+```bash
+npm run setup -- lark
+```
+
+Prompts for App ID, App Secret, and working directory. Setup validates
+the credentials by acquiring a `tenant_access_token` and writes
+`~/.claude-bridge/accounts/lark-<appId>.json`.
+
+#### 3. Restart the daemon
+
+```bash
+npm run daemon -- restart
+```
+
+Startup will list every configured bot:
+
+```
+Started (channel=lark, bots=2)
+  - lark-cli_old_app    cli_old_app  /path/to/project1
+  - lark-cli_new_app    cli_new_app  /path/to/project2
+```
+
+#### 4. Claim ownership on the new bot
+
+Open Feishu, find the new bot, send it a message. The first inbound
+message claims you as the owner — the daemon writes your `open_id`
+into the new account file. Other bots' owners are unaffected.
+
+> A daemon can only run one channel type at a time (`channel=telegram`
+> *or* `channel=lark`, set in `~/.claude-bridge/config.env`). To run
+> Telegram and Feishu bots side-by-side you'd need two daemons with
+> different `CLAUDE_BRIDGE_DATA_DIR` values.
+
+---
+
 ## Listing configured bots
 
 ```bash
-ls ~/.claude-bridge/accounts/ | grep '^telegram-'
+ls ~/.claude-bridge/accounts/
+# telegram bots: telegram-<botId>.json
+# feishu bots:   lark-<appId>.json
 ```
 
-Each `telegram-<botId>.json` is a plain JSON file showing the bot's
-token, owner user ID, and working directory.
+Each account file is plain JSON showing the bot's credentials, owner ID,
+and working directory.
 
 Or just read the daemon's startup log:
 

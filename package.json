@@ -8,6 +8,7 @@
     "packages/core",
     "packages/channel-wechat",
     "packages/channel-telegram",
+    "packages/channel-lark",
     "packages/daemon"
   ],
   "scripts": {
@@ -23,7 +24,7 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   },
-  "keywords": ["claude-code", "claude", "bridge", "chat", "wechat", "telegram", "discord", "skill"],
+  "keywords": ["claude-code", "claude", "bridge", "chat", "wechat", "telegram", "lark", "feishu", "discord", "skill"],
   "author": "lijunzhang-disabled",
   "license": "MIT",
   "repository": {
